@@ -43,36 +43,30 @@ class WhatsAppService:
                 # Get operation from queue with timeout
                 op = self.op_queue.get(timeout=1.0)
                 
+                op_id = op.get('op_id')
+                result = None
+                
                 if op['op'] == 'connect':
                     result = await self._connect_async()
-                    self.result_queue.put(result)
-                
                 elif op['op'] == 'get_qr':
                     result = await self._get_qr_async()
-                    self.result_queue.put(result)
-                
                 elif op['op'] == 'is_connected':
                     result = await self._is_connected_async()
-                    self.result_queue.put(result)
-                
                 elif op['op'] == 'check_online_status':
                     result = await self._check_online_status_async(op['phone'])
-                    self.result_queue.put(result)
-                
                 elif op['op'] == 'disconnect':
                     result = await self._disconnect_async()
-                    self.result_queue.put(result)
-                
                 elif op['op'] == 'stop':
                     break
                 
+                self.result_queue.put({'op_id': op_id, 'result': result})
                 self.op_queue.task_done()
             
             except queue.Empty:
                 continue
             except Exception as e:
                 print(f"Error in playwright loop: {e}")
-                self.result_queue.put({'error': str(e)})
+                self.result_queue.put({'op_id': op_id, 'error': str(e)})
         
         # Cleanup
         if self.browser:
@@ -83,13 +77,22 @@ class WhatsAppService:
     def _execute_operation(self, op_name, timeout=10, **kwargs):
         """Execute an operation on the Playwright thread"""
         try:
-            self.op_queue.put({'op': op_name, **kwargs})
-            result = self.result_queue.get(timeout=timeout)
+            import uuid
+            op_id = str(uuid.uuid4())
+            self.op_queue.put({'op': op_name, 'op_id': op_id, **kwargs})
+            
+            result = None
+            while True:
+                result = self.result_queue.get(timeout=timeout)
+                if isinstance(result, dict) and result.get('op_id') == op_id:
+                    break
+                else:
+                    self.result_queue.put(result)
             
             if isinstance(result, dict) and 'error' in result:
                 raise Exception(result['error'])
             
-            return result
+            return result.get('result') if isinstance(result, dict) else result
         except queue.Empty:
             raise TimeoutError(f"Operation {op_name} timed out")
     
@@ -398,27 +401,37 @@ class WhatsAppService:
                     
                     if is_online is not None and is_online != last_states.get(contact.id):
                         contact.is_online = is_online
+                        now = datetime.now()
                         
                         if is_online:
-                            contact.last_online_at = datetime.now()
-                            print(f"{contact.name} is now ONLINE")
+                            contact.last_online_at = now
+                            print(f"{contact.name} is now ONLINE at {now}")
+                            
+                            status = OnlineStatus(
+                                contact_id=contact.id,
+                                online_at=now,
+                                offline_at=None,
+                                duration_seconds=0
+                            )
+                            db.session.add(status)
                         else:
                             if contact.last_online_at:
-                                duration = (datetime.now() - contact.last_online_at).total_seconds()
+                                duration = (now - contact.last_online_at).total_seconds()
                                 contact.total_online_seconds += duration
-                                contact.last_offline_at = datetime.now()
+                                contact.last_offline_at = now
                                 
                                 status = OnlineStatus(
                                     contact_id=contact.id,
                                     online_at=contact.last_online_at,
-                                    offline_at=datetime.now(),
+                                    offline_at=now,
                                     duration_seconds=duration
                                 )
                                 db.session.add(status)
-                                print(f"{contact.name} is now OFFLINE, duration: {duration}s")
+                                print(f"{contact.name} is now OFFLINE at {now}, duration: {duration}s")
                         
                         last_states[contact.id] = is_online
                         db.session.commit()
+                        print(f"Saved to DB - is_online: {contact.is_online}, last_online_at: {contact.last_online_at}, last_offline_at: {contact.last_offline_at}")
                 
                 time.sleep(3)
             

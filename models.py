@@ -34,5 +34,5 @@ class OnlineStatus(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     contact_id = db.Column(db.Integer, db.ForeignKey('contacts.id'), nullable=False)
     online_at = db.Column(db.DateTime, nullable=False)
-    offline_at = db.Column(db.DateTime, nullable=False)
-    duration_seconds = db.Column(db.Integer, nullable=False)
+    offline_at = db.Column(db.DateTime, nullable=True)
+    duration_seconds = db.Column(db.Integer, default=0)
