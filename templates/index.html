@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Online Tracker</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📱 WhatsApp Online Tracker</h1>
+            <div>
+                <button class="connect-btn" id="connect-btn">WhatsApp'a Bağlan</button>
+                <button class="disconnect-btn" id="disconnect-btn" style="display: none;">Bağlantıyı Kes</button>
+            </div>
+        </header>
+        
+        <div class="status-bar">
+            <div class="status-indicator">
+                <div class="status-dot" id="status-dot"></div>
+                <div class="status-text" id="status-text">Bağlantı yok</div>
+            </div>
+            <button class="track-btn" id="track-btn">Takip Et</button>
+        </div>
+        
+        <div class="contacts-grid" id="contacts-grid">
+            <div class="empty-state">
+                <div class="empty-state-icon">📱</div>
+                <h3>Henüz takip edilen numara yok</h3>
+                <p>Numara eklemek için sağ alttaki + butonuna tıklayın</p>
+            </div>
+        </div>
+    </div>
+    
+    <button class="fab" id="add-contact-btn">+</button>
+    
+    <div class="modal" id="add-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Numara Ekle</h2>
+                <button class="close-btn close-modal">&times;</button>
+            </div>
+            <div class="form-group">
+                <label for="contact-name">İsim</label>
+                <input type="text" id="contact-name" placeholder="Örn: Ahmet Yılmaz">
+            </div>
+            <div class="form-group">
+                <label for="contact-phone">Telefon Numarası</label>
+                <input type="text" id="contact-phone" placeholder="Örn: +905321234567">
+            </div>
+            <button class="submit-btn">Kaydet</button>
+        </div>
+    </div>
+    
+    <div class="modal" id="qr-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>QR Kod ile Bağlan</h2>
+                <button class="close-btn close-modal">&times;</button>
+            </div>
+            <div class="qr-container" id="qr-container">
+                <p>QR kod yükleniyor...</p>
+            </div>
+            <p style="text-align: center; color: #666; margin-top: 15px;">
+                WhatsApp uygulamanızı açın → Ayarlar → Bağlı Cihazlar → Cihaz Bağla
+            </p>
+            <button class="submit-btn" id="manual-connect-btn" style="margin-top: 20px;">QR Kodu Tardım, Bağlandım ✓</button>
+        </div>
+    </div>
+    
+    <div class="modal" id="stats-modal">
+        <div class="modal-content">
+            <div id="stats-modal-content"></div>
+        </div>
+    </div>
+    
+    <script src="/static/script.js"></script>
+</body>
+</html>
