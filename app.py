@@ -50,6 +50,23 @@ def delete_contact(contact_id):
     db.session.commit()
     return jsonify({'success': True})
 
+@app.route('/api/contacts/<int:contact_id>', methods=['PUT'])
+def update_contact(contact_id):
+    contact = Contact.query.get_or_404(contact_id)
+    data = request.json
+    
+    if 'name' in data:
+        contact.name = data['name']
+    if 'phone' in data:
+        contact.phone = data['phone']
+    
+    db.session.commit()
+    return jsonify({
+        'id': contact.id,
+        'name': contact.name,
+        'phone': contact.phone
+    })
+
 @app.route('/api/status', methods=['POST'])
 def update_status():
     data = request.json

@@ -53,6 +53,28 @@
         </div>
     </div>
     
+    <div class="modal" id="edit-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Numara Düzenle</h2>
+                <button class="close-btn" onclick="closeModal('edit-modal')">&times;</button>
+            </div>
+            <div class="form-group">
+                <label for="edit-contact-id">Kişi ID</label>
+                <input type="text" id="edit-contact-id" disabled>
+            </div>
+            <div class="form-group">
+                <label for="edit-contact-name">İsim</label>
+                <input type="text" id="edit-contact-name" placeholder="Örn: Ahmet Yılmaz">
+            </div>
+            <div class="form-group">
+                <label for="edit-contact-phone">Telefon Numarası</label>
+                <input type="text" id="edit-contact-phone" placeholder="Örn: +905321234567">
+            </div>
+            <button class="submit-btn" id="save-edit-btn">Güncelle</button>
+        </div>
+    </div>
+    
     <div class="modal" id="qr-modal">
         <div class="modal-content">
             <div class="modal-header">

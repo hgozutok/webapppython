@@ -296,32 +296,154 @@ class WhatsAppService:
             # Navigate to chat
             clean_phone = phone_number.replace('+', '').replace(' ', '')
             chat_url = f'https://web.whatsapp.com/send?phone={clean_phone}'
-            print(f"Navigating to chat URL: {chat_url}")
             
-            await self.page.goto(chat_url, timeout=30000)
-            await self.page.wait_for_load_state('networkidle', timeout=10000)
+            # Check if we're already on the right page
+            current_url = self.page.url
+            if clean_phone in current_url:
+                print(f"Already on chat page, skipping navigation")
+            else:
+                print(f"Navigating to chat URL: {chat_url}")
+                await self.page.goto(chat_url, timeout=30000)
+                await self.page.wait_for_load_state('networkidle', timeout=10000)
+                await asyncio.sleep(8)
             
-            # Wait for chat to load
-            print("Waiting for chat to load...")
-            await asyncio.sleep(8)
+            # Check online status using JavaScript with more selectors
+            result = await self.page.evaluate(f"""async () => {{
+                try {{
+                    // Try multiple selectors for online status
+                    const selectors = [
+                        '[data-testid="last-seen"]',
+                        '[data-testid="chat-panel-header"]',
+                        '[data-testid="conversation-panel-header"]',
+                        '.chat-panel-header',
+                        '.conversation-panel-header'
+                    ];
+                    
+                    let onlineText = '';
+                    let foundElement = null;
+                    
+                    for (const selector of selectors) {{
+                        const element = document.querySelector(selector);
+                        if (element) {{
+                            const text = element.innerText || element.textContent || '';
+                            if (text.length > 0 && text.length < 200) {{
+                                onlineText = text;
+                                foundElement = selector;
+                                console.log(`Found element with selector: ${{selector}}`);
+                                console.log(`Element text: ${{text}}`);
+                                break;
+                            }}
+                        }}
+                    }}
+                    
+                    // Check page title for clues
+                    const title = document.title;
+                    console.log('Page title:', title);
+                    
+                    // Check all potential online indicators
+                    const allText = document.body.innerText || document.body.textContent || '';
+                    console.log('Full page text length:', allText.length);
+                    console.log('Page text preview:', allText.substring(0, 500));
+                    
+                    // Check for various online indicators in different languages
+                    const onlineIndicators = [
+                        'çevrimiçi',
+                        'online',
+                        'şu an',
+                        'here',
+                        'onaylı',
+                        'active',
+                        'şu anda'
+                    ];
+                    
+                    let isOnline = false;
+                    let foundIndicator = '';
+                    
+                    // Check in the specific element
+                    if (onlineText) {{
+                        for (const indicator of onlineIndicators) {{
+                            if (onlineText.toLowerCase().includes(indicator)) {{
+                                isOnline = true;
+                                foundIndicator = indicator;
+                                console.log(`Found indicator "${{indicator}}" in element`);
+                                break;
+                            }}
+                        }}
+                    }}
+                    
+                    // Check in all text
+                    if (!isOnline) {{
+                        for (const indicator of onlineIndicators) {{
+                            if (allText.toLowerCase().includes(indicator)) {{
+                                isOnline = true;
+                                foundIndicator = indicator;
+                                console.log(`Found indicator "${{indicator}}" in page text`);
+                                break;
+                            }}
+                        }}
+                    }}
+                    
+                    console.log('Final is_online status:', isOnline);
+                    console.log('Found indicator:', foundIndicator);
+                    console.log('Element text used:', onlineText);
+                    
+                    return {{ 
+                        success: true, 
+                        is_online: isOnline,
+                        message: 'Status checked',
+                        element_text: onlineText,
+                        found_indicator: foundIndicator
+                    }};
+                }} catch (e) {{
+                    console.error('Error:', e);
+                    return {{ success: false, message: e.message }};
+                }}
+            }}""")
+            
+            if result and result.get('success'):
+                is_online = result.get('is_online', False)
+                element_text = result.get('element_text', '')
+                found_indicator = result.get('found_indicator', '')
+                
+                print(f"Online status for {phone_number}: {is_online}")
+                print(f"Element text: {element_text}")
+                print(f"Found indicator: {found_indicator}")
+                return is_online
+            
+            return None
+                
+        except Exception as e:
+            print(f"Error checking status for {phone_number}: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+        
+        try:
+            print(f"Checking online status for: {phone_number}")
+            
+            # Navigate to chat
+            clean_phone = phone_number.replace('+', '').replace(' ', '')
+            chat_url = f'https://web.whatsapp.com/send?phone={clean_phone}'
+            
+            # Check if we're already on the right page
+            current_url = self.page.url
+            if clean_phone in current_url:
+                print(f"Already on chat page, skipping navigation")
+            else:
+                print(f"Navigating to chat URL: {chat_url}")
+                await self.page.goto(chat_url, timeout=30000)
+                await self.page.wait_for_load_state('networkidle', timeout=10000)
+                await asyncio.sleep(8)
             
             # Check online status using JavaScript
             result = await self.page.evaluate(f"""async () => {{
                 try {{
-                    // Wait for DOM to be ready
-                    await new Promise(resolve => setTimeout(resolve, 5000));
-                    
-                    // Check if we're still on main page
-                    const url = window.location.href;
-                    console.log('Current URL:', url);
-                    
                     // Look for online status indicators
                     const lastSeen = document.querySelector('[data-testid="last-seen"]');
                     const allText = document.body.innerText || document.body.textContent || '';
                     
                     console.log('Looking for online status...');
                     console.log('Last seen found:', !!lastSeen);
-                    console.log('Page text preview:', allText.substring(0, 200));
                     
                     let isOnline = false;
                     
@@ -344,7 +466,7 @@ class WhatsAppService:
                     
                     return {{ 
                         success: true, 
-                        is_online: isOnline,
+                        is_online: is_online,
                         message: 'Status checked'
                     }};
                 }} catch (e) {{
@@ -433,7 +555,8 @@ class WhatsAppService:
                         db.session.commit()
                         print(f"Saved to DB - is_online: {contact.is_online}, last_online_at: {contact.last_online_at}, last_offline_at: {contact.last_offline_at}")
                 
-                time.sleep(3)
+                # Increase interval to reduce page reloads
+                time.sleep(10)
             
             print("Tracking stopped")
     

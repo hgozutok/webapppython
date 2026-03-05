@@ -137,6 +137,7 @@ function renderContacts() {
             
             <div class="action-buttons">
                 <button class="action-btn stats-btn" onclick="showStatistics(${contact.id})">📊 İstatistikler</button>
+                <button class="action-btn edit-btn" onclick="editContact(${contact.id})">✏️ Düzenle</button>
                 <button class="action-btn delete-btn" onclick="deleteContact(${contact.id})">🗑️ Sil</button>
             </div>
         </div>
@@ -193,6 +194,49 @@ async function deleteContact(id) {
         }
     } catch (error) {
         console.error('Error deleting contact:', error);
+    }
+}
+
+async function editContact(id) {
+    const contact = contacts.find(c => c.id === id);
+    if (!contact) {
+        alert('Kişi bulunamadı');
+        return;
+    }
+    
+    document.getElementById('edit-contact-id').value = contact.id;
+    document.getElementById('edit-contact-name').value = contact.name;
+    document.getElementById('edit-contact-phone').value = contact.phone;
+    
+    openModal('edit-modal');
+}
+
+async function saveEditContact() {
+    const id = parseInt(document.getElementById('edit-contact-id').value);
+    const name = document.getElementById('edit-contact-name').value;
+    const phone = document.getElementById('edit-contact-phone').value;
+    
+    if (!name || !phone) {
+        alert('Lütfen tüm alanları doldurun');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/contacts/${id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, phone })
+        });
+        
+        if (response.ok) {
+            closeModal('edit-modal');
+            loadContacts();
+        } else {
+            alert('Güncelleme başarısız');
+        }
+    } catch (error) {
+        console.error('Error updating contact:', error);
+        alert('Güncelleme sırasında hata oluştu');
     }
 }
 
@@ -472,6 +516,7 @@ function exportData(contactId, format) {
 document.getElementById('add-contact-btn').addEventListener('click', () => openModal('add-modal'));
 document.querySelector('.close-modal').addEventListener('click', () => closeModal('add-modal'));
 document.querySelector('.submit-btn').addEventListener('click', addContact);
+document.getElementById('save-edit-btn').addEventListener('click', saveEditContact);
 document.querySelector('.connect-btn').addEventListener('click', connectWhatsApp);
 document.querySelector('.disconnect-btn').addEventListener('click', disconnectWhatsApp);
 document.getElementById('track-btn').addEventListener('click', toggleTracking);
