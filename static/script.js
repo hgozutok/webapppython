@@ -402,16 +402,30 @@ async function startTracking() {
         await Notification.requestPermission();
     }
     
+    const useDom = document.getElementById('use-dom-check').checked;
+    const useImage = document.getElementById('use-image-check').checked;
+    
+    if (!useDom && !useImage) {
+        alert('Lütfen en az bir izleme yöntemi seçin (DOM veya Screenshot)');
+        return;
+    }
+    
     try {
         const response = await fetch('/api/start-tracking', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contact_ids: contacts.map(c => c.id) })
+            body: JSON.stringify({ 
+                contact_ids: contacts.map(c => c.id),
+                use_dom: useDom,
+                use_image: useImage
+            })
         });
         
         if (response.ok) {
             tracking = true;
             document.getElementById('track-btn').textContent = 'Durdur';
+            document.getElementById('use-dom-check').disabled = true;
+            document.getElementById('use-image-check').disabled = true;
             startAutoRefresh();
             alert('Takip başladı! Bildirimler aktif edildi.');
         }
@@ -429,6 +443,8 @@ async function stopTracking() {
         if (response.ok) {
             tracking = false;
             document.getElementById('track-btn').textContent = 'Takip Et';
+            document.getElementById('use-dom-check').disabled = false;
+            document.getElementById('use-image-check').disabled = false;
             stopAutoRefresh();
         }
     } catch (error) {

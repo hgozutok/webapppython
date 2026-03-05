@@ -182,8 +182,10 @@ def export_data(contact_id):
 def start_tracking():
     data = request.json
     contact_ids = data.get('contact_ids', [])
-    print(f"Starting tracking for contact IDs: {contact_ids}")
-    whatsapp_service.start_tracking(contact_ids)
+    use_dom = data.get('use_dom', True)
+    use_image = data.get('use_image', True)
+    print(f"Starting tracking for contact IDs: {contact_ids}, DOM: {use_dom}, Image: {use_image}")
+    whatsapp_service.start_tracking(contact_ids, use_dom, use_image)
     return jsonify({'success': True})
 
 @app.route('/api/stop-tracking', methods=['POST'])

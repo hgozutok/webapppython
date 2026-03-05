@@ -362,14 +362,25 @@ class WhatsAppService:
                     const isTime = timePatterns.some(pattern => pattern.test(lowerText));
                     
                     const hasPrivacyText = lowerText.includes('son görülme') || lowerText.includes('last seen') || 
-                                         lowerText.includes('yaklaşık') || lowerText.includes('gizlilik') ||
-                                         lowerText.includes('privacy') || lowerText.includes('göreceksiniz');
+                                          lowerText.includes('yaklaşık') || lowerText.includes('gizlilik') ||
+                                          lowerText.includes('privacy') || lowerText.includes('göreceksiniz');
                     
                     const hasNumbers = /\\d/.test(lowerText);
                     
-                    let isOnline = exactOnlineMatch && !hasOffline && !hasPrivacyText && !hasNumbers && lowerText.length < 30;
+                    let isOnline = false;
+                    
+                    if (exactOnlineMatch) {
+                        isOnline = true;
+                    } else if (hasOnline && !hasOffline && !hasPrivacyText && !hasNumbers && lowerText.length < 50) {
+                        isOnline = true;
+                    }
+                    
+                    if (hasOffline) {
+                        isOnline = false;
+                    }
                     
                     console.log('DOM Analysis:', {
+                        text: lowerText,
                         exactOnlineMatch,
                         hasOnline,
                         hasOffline,
@@ -430,52 +441,121 @@ class WhatsAppService:
                 if not screenshot_bytes:
                     print("No screenshot captured")
                 else:
+                    screenshot_bytes = header.screenshot(timeout=30000)
+                
+                if not screenshot_bytes:
+                    print("No screenshot captured")
+                else:
+                    import os
                     import io
-                    from PIL import Image
-                    import numpy as np
+                    import platform
                     
-                    image = Image.open(io.BytesIO(screenshot_bytes))
-                    pixels = np.array(image)
-                    
-                    total_pixels = pixels.shape[0] * pixels.shape[1]
-                    
-                    green_mask = (pixels[:, :, 1] > pixels[:, :, 0] + 40) & (pixels[:, :, 1] > pixels[:, :, 2] + 30) & (pixels[:, :, 1] > 120)
-                    green_pixel_count = np.sum(green_mask)
-                    
-                    blue_green_mask = (pixels[:, :, 1] > pixels[:, :, 0] + 20) & (pixels[:, :, 2] > pixels[:, :, 0] + 20) & ((pixels[:, :, 1] + pixels[:, :, 2]) / 2 > 100) & (pixels[:, :, 1] < pixels[:, :, 2] + 50)
-                    blue_green_count = np.sum(blue_green_mask)
-                    
-                    light_green_mask = (pixels[:, :, 0] > 200) & (pixels[:, :, 1] > 220) & (pixels[:, :, 2] < 180) & (pixels[:, :, 1] > pixels[:, :, 0] + 10)
-                    light_green_count = np.sum(light_green_mask)
-                    
-                    green_ratio = green_pixel_count / total_pixels
-                    blue_green_ratio = blue_green_count / total_pixels
-                    light_green_ratio = light_green_count / total_pixels
-                    
-                    is_online_from_image = (green_ratio > 0.0002 or blue_green_ratio > 0.0003 or light_green_ratio > 0.0001)
-                    
-                    print(f"Image analysis for {phone_number}: {is_online_from_image}")
-                    print(f"  - Green: {green_ratio:.6f}, Blue-Green: {blue_green_ratio:.6f}, Light-Green: {light_green_ratio:.6f}")
+                    try:
+                        import pytesseract
+                        from pytesseract import image_to_string
+                        from PIL import Image, ImageEnhance, ImageFilter
+                        
+                        if platform.system() == 'Windows':
+                            tesseract_path = os.path.join(os.path.dirname(__file__), 'tesseract', 'tesseract.exe')
+                            if os.path.exists(tesseract_path):
+                                pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                                print(f"Using tesseract from: {tesseract_path}")
+                            else:
+                                print("Tesseract not found in local directory")
+                                raise Exception("Tesseract not installed")
+                        
+                        image = Image.open(io.BytesIO(screenshot_bytes))
+                        image_gray = image.convert('L')
+                        image_contrast = ImageEnhance.Contrast(image_gray).enhance(2.0)
+                        image_sharp = image_contrast.filter(ImageFilter.SHARPEN)
+                        
+                        text = image_to_string(image_sharp, lang='tur+eng', config='--psm 6 --oem 1')
+                        lower_text = text.lower().strip()
+                        
+                        print(f"OCR Text from image: {repr(lower_text)}")
+                        
+                        online_keywords = ['çevrimiçi', 'online']
+                        offline_keywords = ['son görülme', 'last seen', 'son gorulme']
+                        
+                        has_online = any(kw in lower_text for kw in online_keywords)
+                        has_offline = any(kw in lower_text for kw in offline_keywords)
+                        
+                        if has_offline:
+                            is_online_from_image = False
+                            print(f"Image OCR: OFFLINE (found offline keyword)")
+                        elif has_online:
+                            is_online_from_image = True
+                            print(f"Image OCR: ONLINE (found online keyword)")
+                        else:
+                            print(f"Image OCR: UNCLEAR (no keyword found)")
+                            is_online_from_image = None
+                    except Exception as e:
+                        print(f"OCR error: {e}")
+                        print("Using DOM text as fallback for screenshot analysis")
+                        
+                        fallback_text = result.get('element_text', '') if result else ''
+                        lower_text = fallback_text.lower().strip()
+                        print(f"Fallback text: {repr(lower_text)}")
+                        
+                        online_keywords = ['çevrimiçi', 'online']
+                        offline_keywords = ['son görülme', 'last seen', 'son gorulme']
+                        
+                        has_online = any(kw in lower_text for kw in online_keywords)
+                        has_offline = any(kw in lower_text for kw in offline_keywords)
+                        
+                        if has_offline:
+                            is_online_from_image = False
+                            print(f"Image (fallback): OFFLINE (found offline keyword)")
+                        elif has_online:
+                            is_online_from_image = True
+                            print(f"Image (fallback): ONLINE (found online keyword)")
+                        else:
+                            print(f"Image (fallback): UNCLEAR (no keyword found)")
+                            is_online_from_image = None
                 
             except Exception as e:
                 print(f"Image analysis failed for {phone_number}: {e}")
+            
+            if not self.use_dom and not self.use_image:
+                print("No tracking method selected, returning None")
+                return None
+            
+            final_is_online = None
+            
+            if self.use_dom:
+                print(f"DOM result: {is_online_from_dom}")
+                if is_online_from_dom is not None:
+                    final_is_online = is_online_from_dom
+                    print(f"Using DOM: {final_is_online}")
+            
+            if self.use_image:
+                print(f"Image result: {is_online_from_image}")
+                if is_online_from_image is not None:
+                    if final_is_online is None:
+                        final_is_online = is_online_from_image
+                        print(f"Using Image (DOM was None): {final_is_online}")
+                    else:
+                        final_is_online = is_online_from_image
+                        print(f"Using Image (overriding DOM): {final_is_online}")
+            
+            print(f"Final status for {phone_number}: {final_is_online} (Use DOM: {self.use_dom}, Use Image: {self.use_image})")
             
             import os
             try:
                 screenshot_path = os.path.join(os.path.dirname(__file__), f'debug_{phone_number}_{int(time.time())}.png')
                 self.page.screenshot(path=screenshot_path, timeout=5000)
                 print(f"Debug screenshot saved: {screenshot_path}")
+                
+                if final_is_online is not None and not final_is_online:
+                    try:
+                        os.remove(screenshot_path)
+                        print(f"Offline, screenshot deleted: {screenshot_path}")
+                    except Exception as e:
+                        print(f"Could not delete screenshot: {e}")
             except Exception as e:
                 print(f"Could not take debug screenshot: {e}")
             
-            if is_online_from_dom is not None and is_online_from_image is not None:
-                final_is_online = is_online_from_dom or is_online_from_image
-                print(f"Final status for {phone_number}: {final_is_online} (DOM: {is_online_from_dom}, Image: {is_online_from_image})")
-                return final_is_online
-            elif is_online_from_dom is not None:
-                return is_online_from_dom
-            elif is_online_from_image is not None:
-                return is_online_from_image
+            return final_is_online
             
             return None
         except Exception as e:
@@ -487,8 +567,10 @@ class WhatsAppService:
     def check_online_status(self, phone_number):
         return self._execute_operation('check_online_status', timeout=120, phone=phone_number)
     
-    def start_tracking(self, contact_ids):
+    def start_tracking(self, contact_ids, use_dom=True, use_image=True):
         self.contact_ids = contact_ids
+        self.use_dom = use_dom
+        self.use_image = use_image
         self.tracking = True
         self.tracking_thread = threading.Thread(target=self._tracking_loop)
         self.tracking_thread.daemon = True
