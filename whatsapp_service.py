@@ -1,7 +1,6 @@
-import asyncio
 import threading
 import queue
-from playwright.async_api import async_playwright
+from playwright.sync_api import sync_playwright
 from datetime import datetime
 import time
 import base64
@@ -17,45 +16,39 @@ class WhatsAppService:
         self.qr_code = None
         self.playwright = None
         
-        # Queue for Playwright operations
         self.op_queue = queue.Queue()
         self.result_queue = queue.Queue()
         
-        # Start Playwright thread
         self.playwright_thread = None
         self.running = True
         self._start_playwright_thread()
         
     def _start_playwright_thread(self):
-        """Start the dedicated Playwright thread"""
         def run_playwright():
-            asyncio.run(self._playwright_loop())
+            self._playwright_loop()
         
         self.playwright_thread = threading.Thread(target=run_playwright, daemon=True)
         self.playwright_thread.start()
     
-    async def _playwright_loop(self):
-        """Main event loop for all Playwright operations"""
-        self.playwright = await async_playwright().start()
+    def _playwright_loop(self):
+        self.playwright = sync_playwright().start()
         
         while self.running:
             try:
-                # Get operation from queue with timeout
                 op = self.op_queue.get(timeout=1.0)
-                
                 op_id = op.get('op_id')
                 result = None
                 
                 if op['op'] == 'connect':
-                    result = await self._connect_async()
+                    result = self._connect_async()
                 elif op['op'] == 'get_qr':
-                    result = await self._get_qr_async()
+                    result = self._get_qr_async()
                 elif op['op'] == 'is_connected':
-                    result = await self._is_connected_async()
+                    result = self._is_connected_async()
                 elif op['op'] == 'check_online_status':
-                    result = await self._check_online_status_async(op['phone'])
+                    result = self._check_online_status_async(op['phone'])
                 elif op['op'] == 'disconnect':
-                    result = await self._disconnect_async()
+                    result = self._disconnect_async()
                 elif op['op'] == 'stop':
                     break
                 
@@ -68,14 +61,12 @@ class WhatsAppService:
                 print(f"Error in playwright loop: {e}")
                 self.result_queue.put({'op_id': op_id, 'error': str(e)})
         
-        # Cleanup
         if self.browser:
-            await self.browser.close()
+            self.browser.close()
         if self.playwright:
-            await self.playwright.stop()
+            self.playwright.stop()
     
     def _execute_operation(self, op_name, timeout=10, **kwargs):
-        """Execute an operation on the Playwright thread"""
         try:
             import uuid
             op_id = str(uuid.uuid4())
@@ -96,57 +87,46 @@ class WhatsAppService:
         except queue.Empty:
             raise TimeoutError(f"Operation {op_name} timed out")
     
-    async def _connect_async(self):
+    def _connect_async(self):
         try:
-            # Use persistent context for session persistence
             import os
             user_data_dir = os.path.join(os.path.dirname(__file__), 'whatsapp_session')
             
-            # Close existing browser and playwright properly
             if self.browser:
                 try:
-                    await self.browser.close()
+                    self.browser.close()
                 except:
                     pass
                 self.browser = None
             
             if self.playwright:
                 try:
-                    await self.playwright.stop()
+                    self.playwright.stop()
                 except:
                     pass
                 self.playwright = None
             
-            # Restart playwright
-            self.playwright = await async_playwright().start()
+            self.playwright = sync_playwright().start()
             
-            # Launch with persistent context
-            self.browser = await self.playwright.chromium.launch_persistent_context(
+            self.browser = self.playwright.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=False,
                 args=['--disable-blink-features=AutomationControlled'],
                 timeout=60000
             )
             
-            # Get or create page
             if len(self.browser.pages) > 0:
                 self.page = self.browser.pages[0]
             else:
-                self.page = await self.browser.new_page()
+                self.page = self.browser.new_page()
             
-            # Navigate to WhatsApp
-            await self.page.goto('https://web.whatsapp.com')
+            self.page.goto('https://web.whatsapp.com')
+            self.page.wait_for_load_state('networkidle', timeout=30000)
+            time.sleep(5)
             
-            # Wait for page to load
-            await self.page.wait_for_load_state('networkidle', timeout=30000)
-            
-            # Wait a bit more and check if already logged in
-            await asyncio.sleep(3)
-            
-            # Check if QR code is present (NOT logged in)
             try:
-                qr_canvas = await self.page.locator('canvas').count()
-                qr_image = await self.page.locator('img[src*="qr"], img[alt*="QR"]').count()
+                qr_canvas = self.page.locator('canvas').count()
+                qr_image = self.page.locator('img[src*="qr"], img[alt*="QR"]').count()
                 
                 if qr_canvas > 0 or qr_image > 0:
                     print("QR code is visible - NOT logged in yet")
@@ -155,11 +135,10 @@ class WhatsAppService:
             except:
                 pass
             
-            # Check if we're already logged in by looking for main interface elements
             try:
-                search_box = await self.page.locator('[data-testid="search"]').count()
-                menu = await self.page.locator('[data-testid="menu"]').count()
-                grid = await self.page.locator('div[role="grid"]').count()
+                search_box = self.page.locator('[data-testid="search"]').count()
+                menu = self.page.locator('[data-testid="menu"]').count()
+                grid = self.page.locator('div[role="grid"]').count()
                 
                 if search_box > 0 or menu > 0 or grid > 0:
                     print("Main interface elements found - ALREADY LOGGED IN")
@@ -180,24 +159,24 @@ class WhatsAppService:
     def connect(self):
         return self._execute_operation('connect', timeout=60)
     
-    async def _get_qr_async(self):
+    def _get_qr_async(self):
         if not self.page:
             return None
         
         try:
-            await asyncio.sleep(3)
+            time.sleep(5)
             
             print("Looking for QR code...")
             
             canvas_elements = self.page.locator('canvas')
-            canvas_count = await canvas_elements.count()
+            canvas_count = canvas_elements.count()
             print(f"Found {canvas_count} canvas elements")
             
             if canvas_count > 0:
                 for i in range(min(canvas_count, 5)):
                     try:
                         canvas = canvas_elements.nth(i)
-                        screenshot = await canvas.screenshot(timeout=5000)
+                        screenshot = canvas.screenshot(timeout=5000)
                         
                         if screenshot and len(screenshot) > 5000:
                             print(f"QR code found from canvas {i}, size: {len(screenshot)}")
@@ -208,12 +187,12 @@ class WhatsAppService:
                         continue
             
             qr_images = self.page.locator('img[src*="qr"], img[alt*="QR"], img[src*="QR"]')
-            img_count = await qr_images.count()
+            img_count = qr_images.count()
             print(f"Found {img_count} QR image elements")
             
             if img_count > 0:
                 try:
-                    screenshot = await qr_images.first.screenshot(timeout=5000)
+                    screenshot = qr_images.first.screenshot(timeout=5000)
                     if screenshot and len(screenshot) > 1000:
                         print(f"QR code found from image, size: {len(screenshot)}")
                         return base64.b64encode(screenshot).decode('utf-8')
@@ -221,9 +200,9 @@ class WhatsAppService:
                     print(f"Error capturing QR image: {e}")
             
             qr_divs = self.page.locator('div[style*="qr"], div[class*="qr"]')
-            if await qr_divs.count() > 0:
+            if qr_divs.count() > 0:
                 try:
-                    screenshot = await qr_divs.first.screenshot(timeout=5000)
+                    screenshot = qr_divs.first.screenshot(timeout=5000)
                     if screenshot and len(screenshot) > 1000:
                         print(f"QR code found from div, size: {len(screenshot)}")
                         return base64.b64encode(screenshot).decode('utf-8')
@@ -239,12 +218,12 @@ class WhatsAppService:
     def get_qr(self):
         return self._execute_operation('get_qr', timeout=5)
     
-    async def _is_connected_async(self):
+    def _is_connected_async(self):
         if not self.page:
             return False
         
         try:
-            title = await self.page.title()
+            title = self.page.title()
             print(f"Page title: {title}")
             
             if 'WhatsApp' in title:
@@ -268,7 +247,7 @@ class WhatsAppService:
                         try:
                             element = self.page.wait_for_selector(selector, timeout=500)
                             if element:
-                                count = await element.count()
+                                count = element.count()
                                 if count > 0:
                                     print(f"Found connected element: {selector}")
                                     self.connected = True
@@ -285,7 +264,7 @@ class WhatsAppService:
     def is_connected(self):
         return self._execute_operation('is_connected', timeout=3)
     
-    async def _check_online_status_async(self, phone_number):
+    def _check_online_status_async(self, phone_number):
         if not self.page or not self.connected:
             print(f"Cannot check status - page: {self.page is not None}, connected: {self.connected}")
             return None
@@ -293,195 +272,212 @@ class WhatsAppService:
         try:
             print(f"Checking online status for: {phone_number}")
             
-            # Navigate to chat
             clean_phone = phone_number.replace('+', '').replace(' ', '')
             chat_url = f'https://web.whatsapp.com/send?phone={clean_phone}'
             
-            # Check if we're already on the right page
             current_url = self.page.url
             if clean_phone in current_url:
                 print(f"Already on chat page, skipping navigation")
             else:
                 print(f"Navigating to chat URL: {chat_url}")
-                await self.page.goto(chat_url, timeout=30000)
-                await self.page.wait_for_load_state('networkidle', timeout=10000)
-                await asyncio.sleep(8)
+                self.page.goto(chat_url, timeout=60000)
+                self.page.wait_for_load_state('networkidle', timeout=30000)
+                time.sleep(5)
             
-            # Check online status using JavaScript with more selectors
-            result = await self.page.evaluate(f"""async () => {{
-                try {{
-                    // Try multiple selectors for online status
+            header_selectors = [
+                '[data-testid="conversation-panel-header"]',
+                '#main > header',
+                '[role="region"] header',
+                'div[role="main"] header',
+                'header[role="banner"]'
+            ]
+            
+            header_found = False
+            for selector in header_selectors:
+                try:
+                    if self.page.wait_for_selector(selector, timeout=10000):
+                        print(f"Header found with selector: {selector}")
+                        header_found = True
+                        break
+                except:
+                    continue
+            
+            if not header_found:
+                print("Header not found with any selector")
+                return None
+            
+            time.sleep(3)
+            
+            result = self.page.evaluate("""() => {
+                try {
                     const selectors = [
-                        '[data-testid="last-seen"]',
-                        '[data-testid="chat-panel-header"]',
                         '[data-testid="conversation-panel-header"]',
-                        '.chat-panel-header',
-                        '.conversation-panel-header'
+                        '#main > header',
+                        '[role="region"] header',
+                        'div[role="main"] header',
+                        'header[role="banner"]'
                     ];
                     
-                    let onlineText = '';
-                    let foundElement = null;
+                    let header = null;
+                    for (const selector of selectors) {
+                        header = document.querySelector(selector);
+                        if (header) {
+                            console.log('Header found with selector:', selector);
+                            break;
+                        }
+                    }
                     
-                    for (const selector of selectors) {{
-                        const element = document.querySelector(selector);
-                        if (element) {{
-                            const text = element.innerText || element.textContent || '';
-                            if (text.length > 0 && text.length < 200) {{
-                                onlineText = text;
-                                foundElement = selector;
-                                console.log(`Found element with selector: ${{selector}}`);
-                                console.log(`Element text: ${{text}}`);
-                                break;
-                            }}
-                        }}
-                    }}
+                    if (!header) {
+                        return { success: false, message: 'Header not found' };
+                    }
                     
-                    // Check page title for clues
-                    const title = document.title;
-                    console.log('Page title:', title);
+                    const allText = header.innerText || header.textContent || '';
+                    const lowerText = allText.toLowerCase().trim();
                     
-                    // Check all potential online indicators
-                    const allText = document.body.innerText || document.body.textContent || '';
-                    console.log('Full page text length:', allText.length);
-                    console.log('Page text preview:', allText.substring(0, 500));
+                    console.log('DOM Full text:', allText);
+                    console.log('DOM Lower text:', lowerText);
+                    console.log('DOM Text length:', allText.length);
                     
-                    // Check for various online indicators in different languages
-                    const onlineIndicators = [
-                        'çevrimiçi',
-                        'online',
-                        'şu an',
-                        'here',
-                        'onaylı',
-                        'active',
-                        'şu anda'
+                    const exactOnlineMatch = lowerText === 'çevrimiçi' || 
+                                           lowerText === 'online' ||
+                                           lowerText === 'şu an çevrimiçi';
+                    
+                    const onlineIndicators = ['çevrimiçi', 'online', 'şu an çevrimiçi'];
+                    const offlineIndicators = [
+                        'son görülme', 'last seen', 'yaklaşık', 
+                        'bugün', 'today', 'dün', 'yesterday',
+                        'saat önce', 'hours ago', 'dakika önce', 'minutes ago'
                     ];
                     
-                    let isOnline = false;
-                    let foundIndicator = '';
+                    const hasOnline = onlineIndicators.some(ind => lowerText.includes(ind));
+                    const hasOffline = offlineIndicators.some(ind => lowerText.includes(ind));
                     
-                    // Check in the specific element
-                    if (onlineText) {{
-                        for (const indicator of onlineIndicators) {{
-                            if (onlineText.toLowerCase().includes(indicator)) {{
-                                isOnline = true;
-                                foundIndicator = indicator;
-                                console.log(`Found indicator "${{indicator}}" in element`);
-                                break;
-                            }}
-                        }}
-                    }}
+                    const timePatterns = [
+                        /^\\d{1,2}\\.\\d{2}$/,
+                        /^\\d{1,2}:\\d{2}$/,
+                        /^\\d{1,2} \\d{1,2}$/,
+                        /^\\d{1,2}\\.\\d{2} - \\d{1,2}\\.\\d{2}$/
+                    ];
                     
-                    // Check in all text
-                    if (!isOnline) {{
-                        for (const indicator of onlineIndicators) {{
-                            if (allText.toLowerCase().includes(indicator)) {{
-                                isOnline = true;
-                                foundIndicator = indicator;
-                                console.log(`Found indicator "${{indicator}}" in page text`);
-                                break;
-                            }}
-                        }}
-                    }}
+                    const isTime = timePatterns.some(pattern => pattern.test(lowerText));
                     
-                    console.log('Final is_online status:', isOnline);
-                    console.log('Found indicator:', foundIndicator);
-                    console.log('Element text used:', onlineText);
+                    const hasPrivacyText = lowerText.includes('son görülme') || lowerText.includes('last seen') || 
+                                         lowerText.includes('yaklaşık') || lowerText.includes('gizlilik') ||
+                                         lowerText.includes('privacy') || lowerText.includes('göreceksiniz');
                     
-                    return {{ 
+                    const hasNumbers = /\\d/.test(lowerText);
+                    
+                    let isOnline = exactOnlineMatch && !hasOffline && !hasPrivacyText && !hasNumbers && lowerText.length < 30;
+                    
+                    console.log('DOM Analysis:', {
+                        exactOnlineMatch,
+                        hasOnline,
+                        hasOffline,
+                        isTime,
+                        hasPrivacyText,
+                        hasNumbers,
+                        textLength: lowerText.length,
+                        isOnline
+                    });
+                    
+                    return { 
                         success: true, 
                         is_online: isOnline,
-                        message: 'Status checked',
-                        element_text: onlineText,
-                        found_indicator: foundIndicator
-                    }};
-                }} catch (e) {{
+                        element_text: allText
+                    };
+                } catch (e) {
                     console.error('Error:', e);
-                    return {{ success: false, message: e.message }};
-                }}
-            }}""")
+                    return { success: false, message: e.message };
+                }
+            }""")
+            
+            is_online_from_dom = None
+            element_text = ''
             
             if result and result.get('success'):
-                is_online = result.get('is_online', False)
+                is_online_from_dom = result.get('is_online', False)
                 element_text = result.get('element_text', '')
-                found_indicator = result.get('found_indicator', '')
+                print(f"DOM check for {phone_number}: {is_online_from_dom}, Text: {element_text}")
+            
+            is_online_from_image = None
+            try:
+                header_selectors = [
+                    '[data-testid="conversation-panel-header"]',
+                    '#main > header',
+                    '[role="region"] header',
+                    'div[role="main"] header',
+                    'header[role="banner"]'
+                ]
                 
-                print(f"Online status for {phone_number}: {is_online}")
-                print(f"Element text: {element_text}")
-                print(f"Found indicator: {found_indicator}")
-                return is_online
+                header = None
+                screenshot_bytes = None
+                
+                for selector in header_selectors:
+                    try:
+                        locator = self.page.locator(selector).first
+                        if locator.count() > 0:
+                            header = locator
+                            print(f"Header screenshot using selector: {selector}")
+                            break
+                    except:
+                        continue
+                
+                if not header:
+                    print("No header found for screenshot")
+                else:
+                    screenshot_bytes = header.screenshot(timeout=30000)
+                
+                if not screenshot_bytes:
+                    print("No screenshot captured")
+                else:
+                    import io
+                    from PIL import Image
+                    import numpy as np
+                    
+                    image = Image.open(io.BytesIO(screenshot_bytes))
+                    pixels = np.array(image)
+                    
+                    total_pixels = pixels.shape[0] * pixels.shape[1]
+                    
+                    green_mask = (pixels[:, :, 1] > pixels[:, :, 0] + 40) & (pixels[:, :, 1] > pixels[:, :, 2] + 30) & (pixels[:, :, 1] > 120)
+                    green_pixel_count = np.sum(green_mask)
+                    
+                    blue_green_mask = (pixels[:, :, 1] > pixels[:, :, 0] + 20) & (pixels[:, :, 2] > pixels[:, :, 0] + 20) & ((pixels[:, :, 1] + pixels[:, :, 2]) / 2 > 100) & (pixels[:, :, 1] < pixels[:, :, 2] + 50)
+                    blue_green_count = np.sum(blue_green_mask)
+                    
+                    light_green_mask = (pixels[:, :, 0] > 200) & (pixels[:, :, 1] > 220) & (pixels[:, :, 2] < 180) & (pixels[:, :, 1] > pixels[:, :, 0] + 10)
+                    light_green_count = np.sum(light_green_mask)
+                    
+                    green_ratio = green_pixel_count / total_pixels
+                    blue_green_ratio = blue_green_count / total_pixels
+                    light_green_ratio = light_green_count / total_pixels
+                    
+                    is_online_from_image = (green_ratio > 0.0002 or blue_green_ratio > 0.0003 or light_green_ratio > 0.0001)
+                    
+                    print(f"Image analysis for {phone_number}: {is_online_from_image}")
+                    print(f"  - Green: {green_ratio:.6f}, Blue-Green: {blue_green_ratio:.6f}, Light-Green: {light_green_ratio:.6f}")
+                
+            except Exception as e:
+                print(f"Image analysis failed for {phone_number}: {e}")
+            
+            import os
+            try:
+                screenshot_path = os.path.join(os.path.dirname(__file__), f'debug_{phone_number}_{int(time.time())}.png')
+                self.page.screenshot(path=screenshot_path, timeout=5000)
+                print(f"Debug screenshot saved: {screenshot_path}")
+            except Exception as e:
+                print(f"Could not take debug screenshot: {e}")
+            
+            if is_online_from_dom is not None and is_online_from_image is not None:
+                final_is_online = is_online_from_dom or is_online_from_image
+                print(f"Final status for {phone_number}: {final_is_online} (DOM: {is_online_from_dom}, Image: {is_online_from_image})")
+                return final_is_online
+            elif is_online_from_dom is not None:
+                return is_online_from_dom
+            elif is_online_from_image is not None:
+                return is_online_from_image
             
             return None
-                
-        except Exception as e:
-            print(f"Error checking status for {phone_number}: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-        
-        try:
-            print(f"Checking online status for: {phone_number}")
-            
-            # Navigate to chat
-            clean_phone = phone_number.replace('+', '').replace(' ', '')
-            chat_url = f'https://web.whatsapp.com/send?phone={clean_phone}'
-            
-            # Check if we're already on the right page
-            current_url = self.page.url
-            if clean_phone in current_url:
-                print(f"Already on chat page, skipping navigation")
-            else:
-                print(f"Navigating to chat URL: {chat_url}")
-                await self.page.goto(chat_url, timeout=30000)
-                await self.page.wait_for_load_state('networkidle', timeout=10000)
-                await asyncio.sleep(8)
-            
-            # Check online status using JavaScript
-            result = await self.page.evaluate(f"""async () => {{
-                try {{
-                    // Look for online status indicators
-                    const lastSeen = document.querySelector('[data-testid="last-seen"]');
-                    const allText = document.body.innerText || document.body.textContent || '';
-                    
-                    console.log('Looking for online status...');
-                    console.log('Last seen found:', !!lastSeen);
-                    
-                    let isOnline = false;
-                    
-                    // Check last-seen element
-                    if (lastSeen) {{
-                        const lastSeenText = lastSeen.innerText || lastSeen.textContent || '';
-                        console.log('Last seen text:', lastSeenText);
-                        
-                        isOnline = lastSeenText.toLowerCase().includes('çevrimiçi') || 
-                                   lastSeenText.toLowerCase().includes('online') ||
-                                   lastSeenText.toLowerCase().includes('şu an');
-                    }}
-                    
-                    // Check in all page text
-                    isOnline = isOnline || allText.toLowerCase().includes('çevrimiçi') || 
-                                       allText.toLowerCase().includes('online') ||
-                                       allText.toLowerCase().includes('şu an çevrimiçi');
-                    
-                    console.log('Final is_online status:', isOnline);
-                    
-                    return {{ 
-                        success: true, 
-                        is_online: is_online,
-                        message: 'Status checked'
-                    }};
-                }} catch (e) {{
-                    console.error('Error:', e);
-                    return {{ success: false, message: e.message }};
-                }}
-            }}""")
-            
-            if result and result.get('success'):
-                is_online = result.get('is_online', False)
-                print(f"Online status for {phone_number}: {is_online}")
-                return is_online
-            
-            return None
-                
         except Exception as e:
             print(f"Error checking status for {phone_number}: {e}")
             import traceback
@@ -518,16 +514,18 @@ class WhatsAppService:
             while self.tracking:
                 print("Tracking loop iteration...")
                 for contact in Contact.query.filter(Contact.id.in_(self.contact_ids)):
-                    print(f"Checking contact: {contact.name} ({contact.phone})")
+                    print("Checking contact: {{}} ({{}})".format(contact.name, contact.phone))
                     is_online = self.check_online_status(contact.phone)
                     
-                    if is_online is not None and is_online != last_states.get(contact.id):
-                        contact.is_online = is_online
+                    actual_is_online = is_online if is_online is not None else False
+                    
+                    if actual_is_online != last_states.get(contact.id):
+                        contact.is_online = actual_is_online
                         now = datetime.now()
                         
-                        if is_online:
+                        if actual_is_online:
                             contact.last_online_at = now
-                            print(f"{contact.name} is now ONLINE at {now}")
+                            print(f"{{contact.name}} is now ONLINE at {{now}}")
                             
                             status = OnlineStatus(
                                 contact_id=contact.id,
@@ -549,23 +547,22 @@ class WhatsAppService:
                                     duration_seconds=duration
                                 )
                                 db.session.add(status)
-                                print(f"{contact.name} is now OFFLINE at {now}, duration: {duration}s")
+                                print(f"{{contact.name}} is now OFFLINE at {{now}}, duration: {{duration}}s")
                         
-                        last_states[contact.id] = is_online
+                        last_states[contact.id] = actual_is_online
                         db.session.commit()
                         print(f"Saved to DB - is_online: {contact.is_online}, last_online_at: {contact.last_online_at}, last_offline_at: {contact.last_offline_at}")
                 
-                # Increase interval to reduce page reloads
                 time.sleep(10)
             
             print("Tracking stopped")
     
-    async def _disconnect_async(self):
+    def _disconnect_async(self):
         self.stop_tracking()
         if self.browser:
-            await self.browser.close()
+            self.browser.close()
         if self.playwright:
-            await self.playwright.stop()
+            self.playwright.stop()
         self.browser = None
         self.page = None
         self.context = None

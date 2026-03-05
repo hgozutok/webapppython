@@ -30,3 +30,4 @@ ENV/
 .bak/
 .DS_Store
 whatsapp_session/
+instance/

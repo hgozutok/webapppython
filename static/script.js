@@ -457,8 +457,28 @@ function stopAutoRefresh() {
 
 async function showStatistics(contactId) {
     try {
+        console.log(`Fetching statistics for contact ID: ${contactId}`);
         const response = await fetch(`/api/statistics/${contactId}`);
+        
+        if (!response.ok) {
+            console.error('Response not ok:', response.status, response.statusText);
+            const text = await response.text();
+            console.error('Response text:', text);
+            alert(`İstatistikler yüklenemedi. Hata kodu: ${response.status}`);
+            return;
+        }
+        
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+            console.error('Invalid content type:', contentType);
+            const text = await response.text();
+            console.error('Response text:', text);
+            alert('İstatistikler yüklenemedi. Geçersiz yanıt formatı.');
+            return;
+        }
+        
         const data = await response.json();
+        console.log('Statistics data:', data);
         
         const modalContent = document.getElementById('stats-modal-content');
         modalContent.innerHTML = `
@@ -488,7 +508,7 @@ async function showStatistics(contactId) {
                 data.history.map(h => `
                     <div class="history-item">
                         <div class="history-time">
-                            ${formatDate(h.online_at)} - ${formatDate(h.offline_at)}
+                            ${h.online_at ? formatDate(h.online_at) : 'N/A'} - ${h.offline_at ? formatDate(h.offline_at) : 'Çevrimiçi'}
                         </div>
                         <div class="history-duration">
                             Süre: ${formatDuration(h.duration_seconds)}
@@ -506,6 +526,7 @@ async function showStatistics(contactId) {
         openModal('stats-modal');
     } catch (error) {
         console.error('Error loading statistics:', error);
+        alert('İstatistikler yüklenirken bir hata oluştu: ' + error.message);
     }
 }
 

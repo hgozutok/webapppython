@@ -125,21 +125,25 @@ def manual_connect():
 
 @app.route('/api/statistics/<int:contact_id>', methods=['GET'])
 def get_statistics(contact_id):
-    contact = Contact.query.get_or_404(contact_id)
-    statuses = OnlineStatus.query.filter_by(contact_id=contact_id).order_by(OnlineStatus.online_at.desc()).all()
-    
-    return jsonify({
-        'contact': {
-            'name': contact.name,
-            'phone': contact.phone,
-            'total_online_seconds': contact.total_online_seconds
-        },
-        'history': [{
-            'online_at': s.online_at.isoformat(),
-            'offline_at': s.offline_at.isoformat(),
-            'duration_seconds': s.duration_seconds
-        } for s in statuses]
-    })
+    try:
+        contact = Contact.query.get_or_404(contact_id)
+        statuses = OnlineStatus.query.filter_by(contact_id=contact_id).order_by(OnlineStatus.online_at.desc()).all()
+        
+        return jsonify({
+            'contact': {
+                'name': contact.name,
+                'phone': contact.phone,
+                'total_online_seconds': contact.total_online_seconds
+            },
+            'history': [{
+                'online_at': s.online_at.isoformat() if s.online_at else None,
+                'offline_at': s.offline_at.isoformat() if s.offline_at else None,
+                'duration_seconds': s.duration_seconds
+            } for s in statuses]
+        })
+    except Exception as e:
+        print(f"Error getting statistics: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/export/<int:contact_id>', methods=['GET'])
 def export_data(contact_id):
