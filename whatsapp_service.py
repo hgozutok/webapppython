@@ -99,15 +99,30 @@ class WhatsAppService:
             import os
             user_data_dir = os.path.join(os.path.dirname(__file__), 'whatsapp_session')
             
+            # Close existing browser and playwright properly
             if self.browser:
-                # Close existing browser
-                await self.browser.close()
+                try:
+                    await self.browser.close()
+                except:
+                    pass
+                self.browser = None
+            
+            if self.playwright:
+                try:
+                    await self.playwright.stop()
+                except:
+                    pass
+                self.playwright = None
+            
+            # Restart playwright
+            self.playwright = await async_playwright().start()
             
             # Launch with persistent context
             self.browser = await self.playwright.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
                 headless=False,
-                args=['--disable-blink-features=AutomationControlled']
+                args=['--disable-blink-features=AutomationControlled'],
+                timeout=60000
             )
             
             # Get or create page
@@ -275,837 +290,72 @@ class WhatsAppService:
         try:
             print(f"Checking online status for: {phone_number}")
             
-            # Try direct URL with phone number
-            clean_phone = phone_number.replace('+', '')
+            # Navigate to chat
+            clean_phone = phone_number.replace('+', '').replace(' ', '')
             chat_url = f'https://web.whatsapp.com/send?phone={clean_phone}'
             print(f"Navigating to chat URL: {chat_url}")
             
-            try:
-                await self.page.goto(chat_url, timeout=30000)
-                await self.page.wait_for_load_state('networkidle', timeout=10000)
-                print("Page loaded")
-            except Exception as e:
-                print(f"Error navigating to chat: {e}")
-                return None
+            await self.page.goto(chat_url, timeout=30000)
+            await self.page.wait_for_load_state('networkidle', timeout=10000)
             
-            # Wait for chat to open
-            print("Waiting for chat...")
-            await asyncio.sleep(5)
+            # Wait for chat to load
+            print("Waiting for chat to load...")
+            await asyncio.sleep(8)
             
-            # Check online status
+            # Check online status using JavaScript
             result = await self.page.evaluate(f"""async () => {{
                 try {{
-                    // Check URL to see if we're still on main page
+                    // Wait for DOM to be ready
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    
+                    // Check if we're still on main page
                     const url = window.location.href;
                     console.log('Current URL:', url);
                     
-                    // Try multiple ways to check online status
-                    const allText = document.body.innerText || document.body.textContent || '';
-                    
-                    console.log('Page text preview:', allText.substring(0, 300));
-                    
-                    // Look for "çevrimiçi" or "online" in ANY text on page
-                    let foundOnline = allText.toLowerCase().includes('çevrimiçi') || 
-                                          allText.toLowerCase().includes('online') ||
-                                          allText.toLowerCase().includes('şu an');
-                    
-                    console.log('Is online:', foundOnline);
-                    
-                    return {{ 
-                        success: true, 
-                        is_online: foundOnline,
-                        message: 'Checked page text',
-                        text: allText.substring(0, 200)
-                    }};
-                }} catch (e) {{
-                    console.error('Error checking status:', e);
-                    return {{ success: false, message: e.message }};
-                }}
-            }}""")
-            
-            print(f"Online status result: {result}")
-            
-            if result and result['success']:
-                is_online = result['is_online']
-                message = result.get('message', '')
-                text = result.get('text', '')
-                print(f"Online status for {phone_number}: {is_online}, Message: {message}")
-                return is_online
-            else:
-                print(f"Failed to get online status: {result}")
-                return None
-                
-        except Exception as e:
-            print(f"Error checking status for {phone_number}: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-        
-        try:
-            print(f"Checking online status for: {phone_number}")
-            
-            # Try direct URL with phone number
-            # Remove + if present
-            clean_phone = phone_number.replace('+', '')
-            chat_url = f'https://web.whatsapp.com/send?phone={clean_phone}'
-            print(f"Navigating to chat URL: {chat_url}")
-            
-            try:
-                await self.page.goto(chat_url, timeout=30000)
-                await self.page.wait_for_load_state('networkidle', timeout=10000)
-                print("Page loaded, checking status...")
-            except Exception as e:
-                print(f"Error navigating to chat URL: {e}")
-                return None
-            
-            # Wait for chat to open
-            print("Waiting for chat to open...")
-            await asyncio.sleep(5)
-            
-            # Check online status
-            result = await self.page.evaluate(f"""async () => {{
-                try {{
-                    // Wait a bit
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    
-                    // Get all text from page
-                    const allText = document.body.innerText || document.body.textContent || '';
-                    console.log('Page text length:', allText.length);
-                    console.log('Page text preview:', allText.substring(0, 500));
-                    
-                    // Check if we're still on main page
-                    if (allText.includes('Aratın veya yeni sohbet başlatın') ||
-                        allText.includes('Tümü') ||
-                        allText.includes('Favoriler')) {{
-                        console.log('Still on main page');
-                        
-                        // Check for online status on main page
-                        const isOnline = allText.toLowerCase().includes('çevrimiçi') || 
-                                         allText.toLowerCase().includes('online');
-                        
-                        return {{ 
-                            success: true, 
-                            is_online: isOnline, 
-                            message: 'On main page'
-                        }};
-                    }}
-                    
-                    // Check for last-seen element
+                    // Look for online status indicators
                     const lastSeen = document.querySelector('[data-testid="last-seen"]');
-                    console.log('Last seen element found:', !!lastSeen);
+                    const allText = document.body.innerText || document.body.textContent || '';
                     
+                    console.log('Looking for online status...');
+                    console.log('Last seen found:', !!lastSeen);
+                    console.log('Page text preview:', allText.substring(0, 200));
+                    
+                    let isOnline = false;
+                    
+                    // Check last-seen element
                     if (lastSeen) {{
                         const lastSeenText = lastSeen.innerText || lastSeen.textContent || '';
                         console.log('Last seen text:', lastSeenText);
                         
-                        const isOnline = lastSeenText.toLowerCase().includes('çevrimiçi') || 
-                                       lastSeenText.toLowerCase().includes('online') ||
-                                       lastSeenText.toLowerCase().includes('here') ||
-                                       lastSeenText.toLowerCase().includes('şu an');
-                        
-                        console.log('Is online (from last-seen):', isOnline);
-                        
-                        return {{ 
-                            success: true, 
-                            is_online: isOnline, 
-                            message: 'Found last-seen',
-                            text: lastSeenText.substring(0, 100)
-                        }};
+                        isOnline = lastSeenText.toLowerCase().includes('çevrimiçi') || 
+                                   lastSeenText.toLowerCase().includes('online') ||
+                                   lastSeenText.toLowerCase().includes('şu an');
                     }}
                     
-                    // Check in page text
-                    const isOnline = allText.toLowerCase().includes('çevrimiçi') || 
-                                     allText.toLowerCase().includes('online') ||
-                                     allText.toLowerCase().includes('şu an çevrimiçi');
+                    // Check in all page text
+                    isOnline = isOnline || allText.toLowerCase().includes('çevrimiçi') || 
+                                       allText.toLowerCase().includes('online') ||
+                                       allText.toLowerCase().includes('şu an çevrimiçi');
                     
-                    console.log('Is online (from page text):', isOnline);
+                    console.log('Final is_online status:', isOnline);
                     
                     return {{ 
                         success: true, 
                         is_online: isOnline,
-                        message: 'Checked page text',
-                        text: allText.substring(0, 200)
+                        message: 'Status checked'
                     }};
                 }} catch (e) {{
-                    console.error('Error checking status:', e);
+                    console.error('Error:', e);
                     return {{ success: false, message: e.message }};
                 }}
             }}""")
             
-            print(f"Online status result: {result}")
-            
-            if result and result['success']:
-                is_online = result['is_online']
-                message = result.get('message', '')
-                text = result.get('text', '')
-                print(f"Online status for {phone_number}: {is_online}, Message: {message}, Text: {text[:100] if text else 'N/A'}")
+            if result and result.get('success'):
+                is_online = result.get('is_online', False)
+                print(f"Online status for {phone_number}: {is_online}")
                 return is_online
-            else:
-                print(f"Failed to get online status: {result}")
-                return None
-                
-        except Exception as e:
-            print(f"Error checking status for {phone_number}: {e}")
-            import traceback
-            traceback.print_exc()
+            
             return None
-        
-        try:
-            print(f"Checking online status for: {phone_number}")
-            
-            # Go back to main page first
-            await self.page.goto('https://web.whatsapp.com')
-            await self.page.wait_for_load_state('networkidle', timeout=10000)
-            await asyncio.sleep(2)
-            
-            # Use JavaScript to search and open chat
-            result = await self.page.evaluate(f"""async () => {{
-                try {{
-                    // Wait for search box
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    
-                    // Find search box
-                    const searchBox = document.querySelector('[contenteditable="true"][data-testid="search"]') ||
-                                          document.querySelector('[data-testid="search"]');
-                    
-                    if (!searchBox) {{
-                        console.log('Search box not found');
-                        return {{ success: false, message: 'Search box not found' }};
-                    }}
-                    
-                    console.log('Search box found');
-                    
-                    // Clear and type phone number
-                    searchBox.focus();
-                    searchBox.textContent = '';
-                    searchBox.value = '';
-                    
-                    const phone = '{phone_number}';
-                    for (let i = 0; i < phone.length; i++) {{
-                        searchBox.textContent += phone[i];
-                        searchBox.value += phone[i];
-                        searchBox.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    }}
-                    
-                    console.log('Typed phone number:', phone);
-                    
-                    // Wait for search results
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    
-                    // Press Enter or click first result
-                    const firstResult = document.querySelector('[role="gridcell"]');
-                    if (firstResult) {{
-                        console.log('Found chat result');
-                        firstResult.click();
-                    }} else {{
-                        // Try pressing Enter
-                        const enterEvent = new KeyboardEvent('keydown', {{
-                            key: 'Enter',
-                            code: 'Enter',
-                            keyCode: 13,
-                            bubbles: true
-                        }});
-                        searchBox.dispatchEvent(enterEvent);
-                    }}
-                    
-                    return {{ success: true, message: 'Search completed' }};
-                }} catch (e) {{
-                    console.error('Error in JS:', e);
-                    return {{ success: false, message: e.message }};
-                }}
-            }}""")
-            
-            print(f"Search result: {result}")
-            
-            if not result or not result['success']:
-                print("Search failed")
-                return None
-            
-            # Wait for chat to open
-            print("Waiting for chat to open...")
-            await asyncio.sleep(5)
-            
-            # Check online status
-            result = await self.page.evaluate(f"""async () => {{
-                try {{
-                    // Wait for chat to load
-                    await new Promise(resolve => setTimeout(resolve, 3000));
-                    
-                    // Check if we're on chat page
-                    const url = window.location.href;
-                    console.log('Current URL:', url);
-                    
-                    if (url.includes('web.whatsapp.com') && !url.includes('send') && !url.includes('chat')) {{
-                        console.log('Still on main page');
-                        
-                        // Look for any online status in entire page
-                        const allText = document.body.innerText || '';
-                        const isOnline = allText.toLowerCase().includes('çevrimiçi') || 
-                                         allText.toLowerCase().includes('online');
-                        
-                        return {{ 
-                            success: true, 
-                            is_online: isOnline, 
-                            message: 'Checking main page'
-                        }};
-                    }}
-                    
-                    // Try to find chat panel
-                    const chatPanel = document.querySelector('[data-testid="conversation-panel-messages"]') ||
-                                       document.querySelector('[data-testid="conversation-panel-body"]') ||
-                                       document.querySelector('div[data-testid="chat-panel"]');
-                    
-                    if (!chatPanel) {{
-                        console.log('Chat panel not found');
-                        
-                        // Check in main content
-                        const mainContent = document.querySelector('main') || document.body;
-                        const allText = mainContent.innerText || mainContent.textContent || '';
-                        const isOnline = allText.toLowerCase().includes('çevrimiçi') || 
-                                         allText.toLowerCase().includes('online');
-                        
-                        return {{ 
-                            success: true, 
-                            is_online: isOnline,
-                            message: 'Checking main content'
-                        }};
-                    }}
-                    
-                    // Get chat panel text
-                    let allText = chatPanel.innerText || chatPanel.textContent || '';
-                    console.log('Chat panel text length:', allText.length);
-                    console.log('Chat panel text preview:', allText.substring(0, 300));
-                    
-                    // Check for indicators that we're NOT in a real chat
-                    if (allText.includes('Aratın veya yeni sohbet başlatın') ||
-                        allText.includes('Tümü') ||
-                        allText.includes('Favoriler')) {{
-                        console.log('Still on main page');
-                        
-                        const isOnline = allText.toLowerCase().includes('çevrimiçi') || 
-                                         allText.toLowerCase().includes('online');
-                        
-                        return {{ 
-                            success: true, 
-                            is_online: isOnline,
-                            message: 'Still on main page'
-                        }};
-                    }}
-                    
-                    // Look for online status
-                    const lastSeen = document.querySelector('[data-testid="last-seen"]');
-                    console.log('Last seen element found:', !!lastSeen);
-                    
-                    let isOnline = false;
-                    
-                    if (lastSeen) {{
-                        const lastSeenText = lastSeen.innerText || lastSeen.textContent || '';
-                        console.log('Last seen text:', lastSeenText);
-                        
-                        isOnline = lastSeenText.toLowerCase().includes('çevrimiçi') || 
-                                   lastSeenText.toLowerCase().includes('online') ||
-                                   lastSeenText.toLowerCase().includes('here') ||
-                                   lastSeenText.toLowerCase().includes('şu an');
-                    }}
-                    
-                    // Also check in chat panel text
-                    isOnline = isOnline || allText.toLowerCase().includes('çevrimiçi') || 
-                                     allText.toLowerCase().includes('online') ||
-                                     allText.toLowerCase().includes('şu an çevrimiçi');
-                    
-                    console.log('Is online:', isOnline);
-                    
-                    return {{ 
-                        success: true, 
-                        is_online: isOnline, 
-                        text: allText.substring(0, 300)
-                    }};
-                }} catch (e) {{
-                    console.error('Error checking status:', e);
-                    return {{ success: false, message: e.message }};
-                }}
-            }}""")
-            
-            print(f"Online status result: {result}")
-            
-            if result and result['success']:
-                is_online = result['is_online']
-                message = result.get('message', '')
-                text = result.get('text', '')
-                print(f"Online status for {phone_number}: {is_online}, Message: {message}, Text: {text[:100] if text else 'N/A'}")
-                return is_online
-            else:
-                print(f"Failed to get online status: {result}")
-                return None
-                
-        except Exception as e:
-            print(f"Error checking status for {phone_number}: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-        
-        try:
-            print(f"Checking online status for: {phone_number}")
-            
-            # Navigate directly to chat URL first
-            chat_url = f'https://web.whatsapp.com/send?phone={phone_number}'
-            print(f"Navigating to chat URL: {chat_url}")
-            await self.page.goto(chat_url)
-            await self.page.wait_for_load_state('networkidle', timeout=10000)
-            
-            # Wait for chat panel to load
-            print("Waiting for chat panel...")
-            await asyncio.sleep(5)
-            
-            # Check online status using JavaScript
-            result = await self.page.evaluate(f"""async () => {{
-                try {{
-                    // Wait a bit more
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                    
-                    // Check URL to make sure we're on chat page
-                    const currentUrl = window.location.href;
-                    console.log('Current URL:', currentUrl);
-                    
-                    if (!currentUrl.includes('send') && !currentUrl.includes('chat')) {{
-                        console.log('Not on chat page yet');
-                        return {{ 
-                            success: false, 
-                            message: 'Not on chat page',
-                            is_online: false 
-                        }};
-                    }}
-                    
-                    // Try multiple selectors for chat panel
-                    const chatPanel = document.querySelector('[data-testid="conversation-panel-messages"]') ||
-                                       document.querySelector('[data-testid="conversation-panel-body"]') ||
-                                       document.querySelector('div[data-testid="chat-panel"]');
-                    
-                    console.log('Chat panel found:', !!chatPanel);
-                    
-                    if (!chatPanel) {{
-                        return {{ 
-                            success: false, 
-                            message: 'Chat panel not loaded',
-                            is_online: false 
-                        }};
-                    }}
-                    
-                    // Get chat panel text
-                    let allText = chatPanel.innerText || chatPanel.textContent || '';
-                    console.log('Chat panel text length:', allText.length);
-                    console.log('Chat panel text preview:', allText.substring(0, 200));
-                    
-                    if (allText.length < 10) {{
-                        console.log('Chat panel text too short, panel not loaded');
-                        return {{ 
-                            success: false, 
-                            message: 'Chat panel text too short',
-                            is_online: false 
-                        }};
-                    }}
-                    
-                    // Check for indicators that we're NOT on a real chat
-                    if (allText.includes('Aratın veya yeni sohbet başlatın') ||
-                        allText.includes('Tümü') ||
-                        allText.includes('Favoriler')) {{
-                        console.log('Still on main page, not in chat');
-                        return {{ 
-                            success: false, 
-                            message: 'Still on main page',
-                            is_online: false 
-                        }};
-                    }}
-                    
-                    // Look for online status
-                    const lastSeen = document.querySelector('[data-testid="last-seen"]');
-                    console.log('Last seen element found:', !!lastSeen);
-                    
-                    let isOnline = false;
-                    
-                    if (lastSeen) {{
-                        const lastSeenText = lastSeen.innerText || lastSeen.textContent || '';
-                        console.log('Last seen text:', lastSeenText);
-                        
-                        isOnline = lastSeenText.toLowerCase().includes('çevrimiçi') || 
-                                   lastSeenText.toLowerCase().includes('online') ||
-                                   lastSeenText.toLowerCase().includes('here') ||
-                                   lastSeenText.toLowerCase().includes('şu an çevrimiçi');
-                    }}
-                    
-                    // Also check in chat panel text
-                    isOnline = isOnline || allText.toLowerCase().includes('çevrimiçi') || 
-                                      allText.toLowerCase().includes('online') ||
-                                      allText.toLowerCase().includes('şu an çevrimiçi');
-                    
-                    console.log('Is online:', isOnline);
-                    
-                    return {{ 
-                        success: true, 
-                        is_online: isOnline, 
-                        text: allText.substring(0, 200) 
-                    }};
-                }} catch (e) {{
-                    console.error('Error checking status:', e);
-                    return {{ success: false, message: e.message }};
-                }}
-            }}""")
-            
-            print(f"Online status result: {result}")
-            
-            if result and result['success']:
-                is_online = result['is_online']
-                message = result.get('message', '')
-                text = result.get('text', '')
-                print(f"Online status for {phone_number}: {is_online}, Message: {message}, Text: {text[:100] if text else 'N/A'}")
-                return is_online
-            else:
-                print(f"Failed to get online status: {result}")
-                return None
-                
-        except Exception as e:
-            print(f"Error checking status for {phone_number}: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-        
-        try:
-            print(f"Checking online status for: {phone_number}")
-            
-            # Use JavaScript to find and interact with elements
-            result = await self.page.evaluate(f"""async () => {{
-                try {{
-                    // Find search box using JavaScript
-                    const searchBox = document.querySelector('[contenteditable="true"][data-testid="search"]') ||
-                                      document.querySelector('div[contenteditable="true"]') ||
-                                      document.querySelector('input[type="text"]') ||
-                                      document.querySelector('[role="searchbox"]');
-                    
-                    if (!searchBox) {{
-                        console.log('Search box not found via JS');
-                        return {{ success: false, message: 'Search box not found' }};
-                    }}
-                    
-                    console.log('Search box found:', searchBox);
-                    
-                    // Click and focus
-                    searchBox.click();
-                    searchBox.focus();
-                    
-                    // Clear and type phone number
-                    searchBox.textContent = '';
-                    searchBox.value = '';
-                    
-                    // Type phone number character by character
-                    const phone = '{phone_number}';
-                    for (let i = 0; i < phone.length; i++) {{
-                        searchBox.textContent += phone[i];
-                        searchBox.value += phone[i];
-                        searchBox.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                    }}
-                    
-                    console.log('Typed phone number:', phone);
-                    
-                    return {{ success: true, message: 'Search box filled' }};
-                }} catch (e) {{
-                    console.error('Error in JS:', e);
-                    return {{ success: false, message: e.message }};
-                }}
-            }}""")
-            
-            print(f"JS result: {result}")
-            
-            if not result or not result['success']:
-                print("Failed to fill search via JS")
-                return None
-            
-            # Wait for search results
-            await asyncio.sleep(3)
-            
-            # Click on first chat result using JavaScript
-            result = await self.page.evaluate("""async () => {
-                try {
-                    // Find chat by phone number or gridcell
-                    const phone = '""" + phone_number + """';
-                    
-                    // Try to find by data-id
-                    let chat = document.querySelector(`[data-id="${phone}"]`);
-                    
-                    // If not found, try to find by title
-                    if (!chat) {
-                        const allChats = document.querySelectorAll('[role="gridcell"], [data-id]');
-                        for (let c of allChats) {
-                            const title = c.getAttribute('title') || c.getAttribute('data-id') || '';
-                            if (title.includes(phone)) {
-                                chat = c;
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // If still not found, click first gridcell
-                    if (!chat) {
-                        chat = document.querySelector('[role="gridcell"]');
-                    }
-                    
-                    if (chat) {
-                        console.log('Found chat:', chat);
-                        chat.click();
-                        return { success: true, message: 'Chat clicked' };
-                    }
-                    
-                    return { success: false, message: 'Chat not found' };
-                } catch (e) {
-                    console.error('Error clicking chat:', e);
-                    return { success: false, message: e.message };
-                }
-            }""")
-            
-            print(f"Chat click result: {result}")
-            
-            # Wait for chat to load - LONGER WAIT
-            print("Waiting for chat panel to load (longer wait)...")
-            await asyncio.sleep(8)
-            
-            # Try to scroll to load chat panel
-            await self.page.evaluate("""() => {
-                try {
-                    const chatPanel = document.querySelector('[data-testid="conversation-panel-messages"]');
-                    if (chatPanel) {
-                        chatPanel.scrollTop = chatPanel.scrollHeight;
-                    }
-                } catch (e) {
-                    console.log('Scroll error:', e);
-                }
-            }""")
-            
-            await asyncio.sleep(2)
-            
-            # Check online status using JavaScript
-            result = await self.page.evaluate(f"""async () => {{
-                try {{
-                    // Wait a bit for chat panel to load
-                    await new Promise(resolve => setTimeout(resolve, 5000));
-                    
-                    // Try multiple selectors for chat panel
-                    const chatPanel = document.querySelector('[data-testid="conversation-panel-messages"]') ||
-                                       document.querySelector('[data-testid="conversation-panel-body"]') ||
-                                       document.querySelector('div[data-testid="chat-panel"]');
-                    
-                    console.log('Chat panel found:', !!chatPanel);
-                    
-                    if (!chatPanel) {{
-                        console.log('Chat panel still not loaded, trying fallback...');
-                        
-                        // Try to find any conversation content
-                        const mainContent = document.querySelector('main') || document.body;
-                        const allText = mainContent.innerText || mainContent.textContent || '';
-                        
-                        // Check for online status in entire text
-                        const isOnline = allText.toLowerCase().includes('çevrimiçi') || 
-                                         allText.toLowerCase().includes('online') ||
-                                         allText.toLowerCase().includes('şu an çevrimiçi');
-                        
-                        console.log('Is online (fallback):', isOnline);
-                        return {{ 
-                            success: true, 
-                            is_online: isOnline, 
-                            text: 'Fallback: ' + allText.substring(0, 200) 
-                        }};
-                    }}
-                    
-                    // Get chat panel text
-                    let allText = chatPanel.innerText || chatPanel.textContent || '';
-                    console.log('Chat panel text length:', allText.length);
-                    console.log('Chat panel text preview:', allText.substring(0, 300));
-                    
-                    // Look for specific online indicators
-                    const lastSeen = document.querySelector('[data-testid="last-seen"]');
-                    console.log('Last seen element found:', !!lastSeen);
-                    
-                    if (lastSeen) {{
-                        const lastSeenText = lastSeen.innerText || lastSeen.textContent || '';
-                        console.log('Last seen text:', lastSeenText);
-                        
-                        // Check for online in last seen
-                        const isOnline = lastSeenText.toLowerCase().includes('çevrimiçi') || 
-                                         lastSeenText.toLowerCase().includes('online') ||
-                                         lastSeenText.toLowerCase().includes('here') ||
-                                         lastSeenText.toLowerCase().includes('şu an');
-                        
-                        console.log('Is online (from last-seen):', isOnline);
-                        return {{ 
-                            success: true, 
-                            is_online: isOnline, 
-                            text: lastSeenText.substring(0, 200) 
-                        }};
-                    }}
-                    
-                    // Check in chat panel text
-                    const isOnline = allText.toLowerCase().includes('çevrimiçi') || 
-                                     allText.toLowerCase().includes('online') ||
-                                     allText.toLowerCase().includes('şu an çevrimiçi') ||
-                                     allText.toLowerCase().includes('şu an çevrimiçi');
-                    
-                    console.log('Is online (from chat panel):', isOnline);
-                    
-                    return {{ 
-                        success: true, 
-                        is_online: isOnline, 
-                        text: allText.substring(0, 300) 
-                    }};
-                }} catch (e) {{
-                    console.error('Error checking status:', e);
-                    return {{ success: false, message: e.message }};
-                }}
-            }}""")
-            
-            print(f"Online status result: {result}")
-            
-            if result and result['success']:
-                is_online = result['is_online']
-                text = result.get('text', '')
-                print(f"Online status for {phone_number}: {is_online}, Text: {text[:100] if text else 'N/A'}")
-                return is_online
-            else:
-                print(f"Failed to get online status: {result}")
-                return None
-                
-        except Exception as e:
-            print(f"Error checking status for {phone_number}: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-        
-        try:
-            print(f"Checking online status for: {phone_number}")
-            
-            # Debug: Take screenshot
-            try:
-                import os
-                screenshot_path = os.path.join(os.path.dirname(__file__), f'debug_{phone_number}.png')
-                await self.page.screenshot(path=screenshot_path, timeout=5000)
-                print(f"Screenshot saved to: {screenshot_path}")
-            except Exception as e:
-                print(f"Could not take screenshot: {e}")
-            
-            # Debug: Print page URL and title
-            url = self.page.url
-            title = await self.page.title()
-            print(f"Current page - URL: {url}, Title: {title}")
-            
-            # Wait for page to be ready
-            try:
-                await self.page.wait_for_load_state('networkidle', timeout=5000)
-                print("Page is ready (networkidle)")
-            except Exception as e:
-                print(f"Wait for load state failed: {e}")
-            
-            # Try to click on body first to focus the page
-            try:
-                await self.page.click('body', timeout=2000)
-                print("Clicked on body to focus page")
-            except:
-                pass
-            
-            # Wait a bit for everything to load
-            await asyncio.sleep(2)
-            
-            # Try multiple search box selectors
-            search_selectors = [
-                '[contenteditable="true"][data-testid="search"]',
-                '[contenteditable="true"][title*="Ara"]',
-                '[contenteditable="true"][placeholder*="Ara"]',
-                'div[contenteditable="true"]',
-                'input[placeholder*="Ara"]',
-                'input[title*="Ara"]',
-                '[data-testid="search"]'
-            ]
-            
-            search_box = None
-            for selector in search_selectors:
-                try:
-                    search_box = self.page.locator(selector)
-                    count = await search_box.count()
-                    print(f"Selector {selector}: found {count} elements")
-                    if count > 0:
-                        await search_box.wait_for(state='visible', timeout=2000)
-                        await search_box.click(timeout=2000)
-                        print(f"Search box clicked using selector: {selector}")
-                        break
-                except Exception as e:
-                    print(f"Selector {selector} failed: {e}")
-                    continue
-            
-            if not search_box:
-                print("No search box found - WhatsApp page might not be loaded properly")
-                print("Please check the Chrome window and ensure WhatsApp Web is loaded")
-                return None
-            
-            await asyncio.sleep(0.5)
-            await search_box.fill('', timeout=2000)
-            await asyncio.sleep(0.5)
-            await search_box.fill(phone_number, timeout=2000)
-            print(f"Filled search with: {phone_number}")
-            await asyncio.sleep(3)
-            
-            # Try multiple chat selectors
-            chat_selectors = [
-                f'[data-id="{phone_number}"]',
-                f'[title*="{phone_number}"]',
-                f'[aria-label*="{phone_number}"]'
-            ]
-            
-            chat = None
-            for selector in chat_selectors:
-                try:
-                    chat = self.page.locator(selector)
-                    count = await chat.count()
-                    print(f"Chat selector {selector}: found {count} chats")
-                    if count > 0:
-                        break
-                except:
-                    continue
-            
-            if not chat or await chat.count() == 0:
-                # Try first gridcell
-                gridcells = self.page.locator('[role="gridcell"], div[role="gridcell"]')
-                gridcell_count = await gridcells.count()
-                print(f"Found {gridcell_count} gridcells")
-                if gridcell_count > 0:
-                    chat = gridcells.first
-            
-            if chat and await chat.count() > 0:
-                await chat.click(timeout=2000)
-                print("Chat clicked")
-                await asyncio.sleep(3)
-                
-                # Try multiple last-seen selectors
-                last_seen_selectors = [
-                    '[data-testid="last-seen"]',
-                    'span:has-text("çevrimiçi")',
-                    'span:has-text("online")',
-                    'div[data-testid="conversation-panel-messages"] span:last-child'
-                ]
-                
-                for selector in last_seen_selectors:
-                    try:
-                        last_seen = self.page.locator(selector)
-                        count = await last_seen.count()
-                        if count > 0:
-                            text = await last_seen.first.inner_text()
-                            print(f"Found last-seen element: {text}")
-                            is_online = 'çevrimiçi' in text.lower() or 'online' in text.lower()
-                            print(f"Online status for {phone_number}: {is_online}")
-                            return is_online
-                    except:
-                        continue
-                
-                print("No last-seen element found")
-                return False
-            else:
-                print(f"No chat found for {phone_number}")
-                return None
                 
         except Exception as e:
             print(f"Error checking status for {phone_number}: {e}")
@@ -1114,7 +364,7 @@ class WhatsAppService:
             return None
     
     def check_online_status(self, phone_number):
-        return self._execute_operation('check_online_status', timeout=30, phone=phone_number)
+        return self._execute_operation('check_online_status', timeout=120, phone=phone_number)
     
     def start_tracking(self, contact_ids):
         self.contact_ids = contact_ids
