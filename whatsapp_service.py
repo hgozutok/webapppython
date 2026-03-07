@@ -541,19 +541,31 @@ class WhatsAppService:
             print(f"Final status for {phone_number}: {final_is_online} (Use DOM: {self.use_dom}, Use Image: {self.use_image})")
             
             import os
+            screenshot_path = None
             try:
                 screenshot_path = os.path.join(os.path.dirname(__file__), f'debug_{phone_number}_{int(time.time())}.png')
                 self.page.screenshot(path=screenshot_path, timeout=5000)
                 print(f"Debug screenshot saved: {screenshot_path}")
                 
-                if final_is_online is not None and not final_is_online:
+                print(f"Checking deletion: final_is_online={final_is_online}")
+                if final_is_online is not True:
                     try:
-                        os.remove(screenshot_path)
-                        print(f"Offline, screenshot deleted: {screenshot_path}")
+                        if os.path.exists(screenshot_path):
+                            os.remove(screenshot_path)
+                            print(f"✓ Not online, screenshot deleted: {screenshot_path}")
+                            screenshot_path = None
+                        else:
+                            print(f"✗ Screenshot file not found: {screenshot_path}")
                     except Exception as e:
-                        print(f"Could not delete screenshot: {e}")
+                        print(f"✗ Could not delete screenshot: {e}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    print(f"→ Keeping screenshot (final_is_online={final_is_online})")
             except Exception as e:
                 print(f"Could not take debug screenshot: {e}")
+                import traceback
+                traceback.print_exc()
             
             return final_is_online
             
