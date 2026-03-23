@@ -1,9 +1,17 @@
+import os
+os.environ['PLAYWRIGHT_DISABLE_ASYNCIO'] = '1'
+os.environ['PYTHONASYNCIODEBUG'] = '0'
+
 import threading
 import queue
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 import time
 import base64
+import asyncio
+
+# Disable asyncio event loop policy for playwright
+_original_policy = asyncio.get_event_loop_policy()
 
 class WhatsAppService:
     def __init__(self):
@@ -15,6 +23,13 @@ class WhatsAppService:
         self.contact_ids = []
         self.qr_code = None
         self.playwright = None
+        self.use_dom = True
+        self.use_image = True
+        
+        # Telegram notification callback
+        self.on_online_callback = None
+        # Database update callback (will be called from main thread)
+        self.on_status_change_callback = None
         
         self.op_queue = queue.Queue()
         self.result_queue = queue.Queue()
@@ -126,8 +141,8 @@ class WhatsAppService:
             time.sleep(5)
             
             try:
-                qr_canvas = self.page.locator('canvas').count()
-                qr_image = self.page.locator('img[src*="qr"], img[alt*="QR"]').count()
+                qr_canvas = len(self.page.locator('canvas').all())
+                qr_image = len(self.page.locator('img[src*="qr"], img[alt*="QR"]').all())
                 
                 if qr_canvas > 0 or qr_image > 0:
                     print("QR code is visible - NOT logged in yet")
@@ -137,9 +152,9 @@ class WhatsAppService:
                 pass
             
             try:
-                search_box = self.page.locator('[data-testid="search"]').count()
-                menu = self.page.locator('[data-testid="menu"]').count()
-                grid = self.page.locator('div[role="grid"]').count()
+                search_box = len(self.page.locator('[data-testid="search"]').all())
+                menu = len(self.page.locator('[data-testid="menu"]').all())
+                grid = len(self.page.locator('div[role="grid"]').all())
                 
                 if search_box > 0 or menu > 0 or grid > 0:
                     print("Main interface elements found - ALREADY LOGGED IN")
@@ -455,7 +470,6 @@ class WhatsAppService:
                 if not screenshot_bytes:
                     print("No screenshot captured")
                 else:
-                    import os
                     import io
                     import platform
                     
@@ -521,7 +535,7 @@ class WhatsAppService:
                         else:
                             print(f"Image (fallback): UNCLEAR (no keyword found)")
                             is_online_from_image = None
-                
+            
             except Exception as e:
                 print(f"Image analysis failed for {phone_number}: {e}")
             
@@ -549,7 +563,6 @@ class WhatsAppService:
             
             print(f"Final status for {phone_number}: {final_is_online} (Use DOM: {self.use_dom}, Use Image: {self.use_image})")
             
-            import os
             screenshot_path = None
             try:
                 screenshot_path = os.path.join(os.path.dirname(__file__), f'debug_{phone_number}_{int(time.time())}.png')
@@ -604,62 +617,125 @@ class WhatsAppService:
             self.tracking_thread.join(timeout=5)
     
     def _tracking_loop(self):
-        from app import app
-        with app.app_context():
-            from models import db, Contact, OnlineStatus
+        # This tracking loop does NOT use Flask's app context
+        # Instead, it collects data and reports back via callback for DB operations
+        
+        print(f"Tracking started for contact IDs: {self.contact_ids}")
+        
+        # Store contact info (id, name, phone) locally without DB access
+        # We'll need to get this from the main app before starting
+        # For now, use a queue to receive contact info from main thread
+        contact_info_queue = queue.Queue()
+        
+        # Request contact info from main thread
+        if self.on_status_change_callback:
+            # Send a request for contact info
+            self.on_status_change_callback({
+                'type': 'get_contacts',
+                'contact_ids': self.contact_ids,
+                'response_queue': contact_info_queue
+            })
             
-            print(f"Tracking started for contact IDs: {self.contact_ids}")
-            
-            last_states = {}
-            
-            for contact in Contact.query.filter(Contact.id.in_(self.contact_ids)):
-                last_states[contact.id] = contact.is_online
-            
-            while self.tracking:
-                print("Tracking loop iteration...")
-                for contact in Contact.query.filter(Contact.id.in_(self.contact_ids)):
-                    print(f"Checking contact: {contact.name} ({contact.phone})")
-                    is_online = self.check_online_status(contact.phone)
-                    
-                    actual_is_online = is_online if is_online is not None else False
-                    
-                    if actual_is_online != last_states.get(contact.id):
-                        contact.is_online = actual_is_online
-                        now = datetime.now()
-                        
-                        if actual_is_online:
-                            contact.last_online_at = now
-                            print(f"{contact.name} is now ONLINE at {now}")
-                            
-                            status = OnlineStatus(
-                                contact_id=contact.id,
-                                online_at=now,
-                                offline_at=None,
-                                duration_seconds=0
-                            )
-                            db.session.add(status)
-                        else:
-                            if contact.last_online_at:
-                                duration = (now - contact.last_online_at).total_seconds()
-                                contact.total_online_seconds += duration
-                                contact.last_offline_at = now
-                                
-                                status = OnlineStatus(
-                                    contact_id=contact.id,
-                                    online_at=contact.last_online_at,
-                                    offline_at=now,
-                                    duration_seconds=duration
-                                )
-                                db.session.add(status)
-                                print(f"{contact.name} is now OFFLINE at {now}, duration: {duration}s")
-                        
-                        last_states[contact.id] = actual_is_online
-                        db.session.commit()
-                        print(f"Saved to DB - is_online: {contact.is_online}, last_online_at: {contact.last_online_at}, last_offline_at: {contact.last_offline_at}")
+            # Wait for contact info from main thread
+            try:
+                contacts_data = contact_info_queue.get(timeout=10)
+            except queue.Empty:
+                print("Failed to get contact info from main thread")
+                return
+        else:
+            print("No status change callback configured!")
+            return
+        
+        # Initialize last_states with None so first online detection triggers callback
+        last_states = {}
+        for contact_data in contacts_data:
+            last_states[contact_data['id']] = None  # Force callback on first check
+        
+        while self.tracking:
+            print("Tracking loop iteration...")
+            for contact_data in contacts_data:
+                contact_id = contact_data['id']
+                contact_name = contact_data['name']
+                contact_phone = contact_data['phone']
                 
-                time.sleep(10)
+                print(f"Checking contact: {contact_name} ({contact_phone})")
+                is_online = self.check_online_status(contact_phone)
+                
+                actual_is_online = is_online if is_online is not None else False
+                
+                if actual_is_online != last_states.get(contact_id):
+                    now = datetime.now()
+                    
+                    if actual_is_online:
+                        print(f"{contact_name} is now ONLINE at {now}")
+                        
+                        # Handle screenshot and telegram notification in this thread
+                        print(f"[DEBUG] on_online_callback = {self.on_online_callback}")
+                        if self.on_online_callback:
+                            print(f"[DEBUG] Calling Telegram callback for {contact_name}")
+                            try:
+                                import glob
+                                import shutil
+                                import tempfile
+                                
+                                # Also search with + prefix (original phone format)
+                                phone_clean = contact_phone.replace('+', '').replace(' ', '')
+                                debug_files = glob.glob(os.path.join(os.path.dirname(__file__), f'debug_{phone_clean}_*.png'))
+                                
+                                # Also check with + prefix in filename
+                                if not debug_files:
+                                    debug_files_plus = glob.glob(os.path.join(os.path.dirname(__file__), f'debug_+{phone_clean}_*.png'))
+                                    if debug_files_plus:
+                                        debug_files = debug_files_plus
+                                
+                                if debug_files:
+                                    screenshot_path = max(debug_files, key=os.path.getmtime)
+                                    print(f"Kullanilacak debug screenshot: {screenshot_path}")
+                                else:
+                                    print(f"[WARN] Debug screenshot bulunamadi, yeni screenshot cekilecek")
+                                    screenshot_path = os.path.join(os.path.dirname(__file__), f'notify_{phone_clean}_{int(time.time())}.png')
+                                    if self.page:
+                                        try:
+                                            self.page.screenshot(path=screenshot_path, timeout=10000)
+                                            print(f"Yeni screenshot cekildi: {screenshot_path}")
+                                        except Exception as e:
+                                            print(f"Screenshot hatasi: {e}")
+                                            screenshot_path = None
+                                
+                                if not screenshot_path:
+                                    print("[WARN] Screenshot yok, bildirim ekransiz gonderilecek")
+                                    temp_screenshot = None
+                                else:
+                                    temp_dir = tempfile.gettempdir()
+                                    temp_screenshot = os.path.join(temp_dir, f'telegram_notify_{int(time.time())}.png')
+                                    shutil.copy2(screenshot_path, temp_screenshot)
+                                
+                                contact_info = {
+                                    'name': contact_name,
+                                    'phone': contact_phone,
+                                    'screenshot_path': temp_screenshot
+                                }
+                                self.on_online_callback(contact_info)
+                            except Exception as e:
+                                print(f"[TELEGRAM ERROR] Bildirim hatasi: {e}")
+                    
+                    # Report status change to main thread for DB update
+                    if self.on_status_change_callback:
+                        self.on_status_change_callback({
+                            'type': 'status_change',
+                            'contact_id': contact_id,
+                            'is_online': actual_is_online,
+                            'timestamp': now,
+                            'contact_name': contact_name,
+                            'contact_phone': contact_phone
+                        })
+                    
+                    last_states[contact_id] = actual_is_online
+                    print(f"Status change: {contact_name} -> {actual_is_online}")
             
-            print("Tracking stopped")
+            time.sleep(10)
+        
+        print("Tracking stopped")
     
     def _disconnect_async(self):
         self.stop_tracking()

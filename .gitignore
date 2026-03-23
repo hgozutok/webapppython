@@ -32,3 +32,5 @@ ENV/
 whatsapp_session/
 instance/
 debug*
+.env
+*.env

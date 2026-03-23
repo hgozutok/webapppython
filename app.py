@@ -1,8 +1,15 @@
 from flask import Flask, render_template, request, jsonify, Response
 from datetime import datetime
 import json
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env
+load_dotenv()
+
 from models import db, Contact, OnlineStatus
 from whatsapp_service import WhatsAppService
+from telegram_service import TelegramServiceSync
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///whatsapp_tracker.db'
@@ -10,6 +17,137 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 whatsapp_service = WhatsAppService()
+
+# Telegram Service - environment variable'dan al
+telegram_service = None
+
+def get_telegram_config():
+    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    chat_id = os.environ.get('TELEGRAM_CHAT_ID')
+    return bot_token, chat_id
+
+def on_contact_online(contact_info):
+    """Contact online olduğunda Telegram bildirimi gönder"""
+    global telegram_service
+    print(f"[TELEGRAM DEBUG] on_contact_online called with: {contact_info}")
+    
+    def send_notification():
+        """Ayrı thread'de çalıştır"""
+        global telegram_service
+        print(f"[TELEGRAM DEBUG] send_notification started")
+        
+        if telegram_service is None:
+            bot_token, chat_id = get_telegram_config()
+            print(f"[TELEGRAM DEBUG] bot_token={bot_token}, chat_id={chat_id}")
+            if bot_token and chat_id:
+                telegram_service = TelegramServiceSync(bot_token, chat_id)
+        
+        if telegram_service:
+            try:
+                name = contact_info.get('name', 'Bilinmiyor')
+                phone = contact_info.get('phone', '')
+                screenshot_path = contact_info.get('screenshot_path')
+                print(f"[TELEGRAM DEBUG] Sending notification for {name}, screenshot: {screenshot_path}")
+                
+                message = f"🚨 *{name}* çevrimiçi oldu!\n📱 Tel: {phone}"
+                telegram_service.notify_online(name, screenshot_path, message)
+                print(f"[TELEGRAM] Bildirim gönderildi: {name}")
+            except Exception as e:
+                print(f"[TELEGRAM ERROR] {e}")
+        else:
+            print("[TELEGRAM ERROR] telegram_service is None - not configured?")
+    
+    # Telegram bildirimini ayrı thread'de çalıştır
+    import threading
+    notification_thread = threading.Thread(target=send_notification, daemon=True)
+    notification_thread.start()
+
+# WhatsApp Service'e callback ata
+whatsapp_service.on_online_callback = on_contact_online
+
+# Status change callback for database operations (runs in main Flask thread)
+import queue
+
+def setup_status_callback():
+    """Set up callback to handle database operations from tracking loop"""
+    status_queue = queue.Queue()
+    
+    def handle_status_changes():
+        """Process status changes in main thread to avoid greenlet issues"""
+        while True:
+            try:
+                msg = status_queue.get(timeout=1)
+                
+                if msg.get('type') == 'get_contacts':
+                    # Get contact info from DB and send back
+                    response_queue = msg.get('response_queue')
+                    contact_ids = msg.get('contact_ids', [])
+                    
+                    with app.app_context():
+                        contacts = Contact.query.filter(Contact.id.in_(contact_ids)).all()
+                        contacts_data = [{'id': c.id, 'name': c.name, 'phone': c.phone} for c in contacts]
+                        response_queue.put(contacts_data)
+                        
+                elif msg.get('type') == 'status_change':
+                    # Update database with status change
+                    contact_id = msg.get('contact_id')
+                    is_online = msg.get('is_online')
+                    timestamp = msg.get('timestamp')
+                    contact_name = msg.get('contact_name')
+                    
+                    with app.app_context():
+                        contact = Contact.query.get(contact_id)
+                        if contact:
+                            contact.is_online = is_online
+                            
+                            if is_online:
+                                contact.last_online_at = timestamp
+                                status = OnlineStatus(
+                                    contact_id=contact.id,
+                                    online_at=timestamp,
+                                    offline_at=None,
+                                    duration_seconds=0
+                                )
+                                db.session.add(status)
+                            else:
+                                if contact.last_online_at:
+                                    duration = (timestamp - contact.last_online_at).total_seconds()
+                                    contact.total_online_seconds += duration
+                                    contact.last_offline_at = timestamp
+                                    
+                                    status = OnlineStatus(
+                                        contact_id=contact.id,
+                                        online_at=contact.last_online_at,
+                                        offline_at=timestamp,
+                                        duration_seconds=duration
+                                    )
+                                    db.session.add(status)
+                            
+                            db.session.commit()
+                            print(f"[DB] Updated {contact_name} -> is_online={is_online}")
+                            
+            except queue.Empty:
+                continue
+            except Exception as e:
+                print(f"[ERROR] Status callback error: {e}")
+                import traceback
+                traceback.print_exc()
+    
+    # Start the status handler thread
+    import threading
+    handler_thread = threading.Thread(target=handle_status_changes, daemon=True)
+    handler_thread.start()
+    
+    return status_queue
+
+# Set up the status callback queue
+status_change_queue = setup_status_callback()
+
+# Set the callback on WhatsApp service
+def status_change_callback(msg):
+    status_change_queue.put(msg)
+
+whatsapp_service.on_status_change_callback = status_change_callback
 
 @app.route('/')
 def index():
@@ -192,6 +330,56 @@ def start_tracking():
 def stop_tracking():
     whatsapp_service.stop_tracking()
     return jsonify({'success': True})
+
+@app.route('/api/telegram/config', methods=['GET'])
+def get_telegram_config_api():
+    """Mevcut Telegram config durumunu döndür"""
+    bot_token, chat_id = get_telegram_config()
+    return jsonify({
+        'configured': bool(bot_token and chat_id),
+        'has_token': bool(bot_token),
+        'has_chat_id': bool(chat_id)
+    })
+
+@app.route('/api/telegram/config', methods=['POST'])
+def set_telegram_config():
+    """Telegram config ayarla"""
+    data = request.json
+    bot_token = data.get('bot_token')
+    chat_id = data.get('chat_id')
+    
+    if not bot_token or not chat_id:
+        return jsonify({'success': False, 'message': 'bot_token ve chat_id gerekli'})
+    
+    # Environment variable olarak kaydet
+    os.environ['TELEGRAM_BOT_TOKEN'] = bot_token
+    os.environ['TELEGRAM_CHAT_ID'] = chat_id
+    
+    # Global telegram_service'i yeniden oluştur
+    global telegram_service
+    telegram_service = TelegramServiceSync(bot_token, chat_id)
+    
+    print(f"[TELEGRAM] Konfigürasyon güncellendi")
+    return jsonify({'success': True, 'message': 'Telegram ayarlandı'})
+
+@app.route('/api/telegram/test', methods=['POST'])
+def test_telegram():
+    """Telegram bağlantısını test et"""
+    global telegram_service
+    
+    if telegram_service is None:
+        bot_token, chat_id = get_telegram_config()
+        if bot_token and chat_id:
+            telegram_service = TelegramServiceSync(bot_token, chat_id)
+    
+    if telegram_service is None:
+        return jsonify({'success': False, 'message': 'Telegram ayarlanmamış'})
+    
+    try:
+        result = telegram_service.send_message("✅ WhatsApp Tracker bağlantısı başarılı!")
+        return jsonify({'success': True, 'message': 'Test mesajı gönderildi'})
+    except Exception as e:
+        return jsonify({'success': False, 'message': str(e)})
 
 if __name__ == '__main__':
     with app.app_context():
