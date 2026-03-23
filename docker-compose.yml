@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  whatsapp-tracker:
+    build: .
+    container_name: whatsapp-tracker
+    ports:
+      - "5000:5000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+    volumes:
+      - whatsapp_session:/app/whatsapp_session
+      - db_data:/app
+    restart: unless-stopped
+    shm_size: '2gb'
+
+volumes:
+  whatsapp_session:
+  db_data:
