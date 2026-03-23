@@ -44,6 +44,7 @@ class WhatsAppService:
                 elif op['op'] == 'get_qr':
                     result = self._get_qr_async()
                 elif op['op'] == 'is_connected':
+                    print(f"[playwright_loop] Handling is_connected, self.connected = {self.connected}")
                     result = self._is_connected_async()
                 elif op['op'] == 'check_online_status':
                     result = self._check_online_status_async(op['phone'])
@@ -143,6 +144,7 @@ class WhatsAppService:
                 if search_box > 0 or menu > 0 or grid > 0:
                     print("Main interface elements found - ALREADY LOGGED IN")
                     self.connected = True
+                    print(f"Setting self.connected = True")
                     return {'success': True, 'message': 'WhatsApp already connected', 'already_logged_in': True}
             except:
                 pass
@@ -219,7 +221,14 @@ class WhatsAppService:
         return self._execute_operation('get_qr', timeout=5)
     
     def _is_connected_async(self):
+        print(f"[_is_connected_async] self.connected = {self.connected}, self.page = {self.page is not None}")
+        
+        if self.connected:
+            print("[_is_connected_async] Returning True because self.connected is True")
+            return True
+        
         if not self.page:
+            print("[_is_connected_async] No page, returning False")
             return False
         
         try:
@@ -584,6 +593,7 @@ class WhatsAppService:
         self.use_dom = use_dom
         self.use_image = use_image
         self.tracking = True
+        print(f"[start_tracking] Starting with contact_ids: {contact_ids}, connected: {self.connected}")
         self.tracking_thread = threading.Thread(target=self._tracking_loop)
         self.tracking_thread.daemon = True
         self.tracking_thread.start()
@@ -608,7 +618,7 @@ class WhatsAppService:
             while self.tracking:
                 print("Tracking loop iteration...")
                 for contact in Contact.query.filter(Contact.id.in_(self.contact_ids)):
-                    print("Checking contact: {{}} ({{}})".format(contact.name, contact.phone))
+                    print(f"Checking contact: {contact.name} ({contact.phone})")
                     is_online = self.check_online_status(contact.phone)
                     
                     actual_is_online = is_online if is_online is not None else False
@@ -619,7 +629,7 @@ class WhatsAppService:
                         
                         if actual_is_online:
                             contact.last_online_at = now
-                            print(f"{{contact.name}} is now ONLINE at {{now}}")
+                            print(f"{contact.name} is now ONLINE at {now}")
                             
                             status = OnlineStatus(
                                 contact_id=contact.id,
@@ -641,7 +651,7 @@ class WhatsAppService:
                                     duration_seconds=duration
                                 )
                                 db.session.add(status)
-                                print(f"{{contact.name}} is now OFFLINE at {{now}}, duration: {{duration}}s")
+                                print(f"{contact.name} is now OFFLINE at {now}, duration: {duration}s")
                         
                         last_states[contact.id] = actual_is_online
                         db.session.commit()
