@@ -1,20 +1,22 @@
-
 services:
   whatsapp-tracker:
     build: .
     container_name: whatsapp-tracker
     ports:
       - "5000:5000"
+      - "80:80"
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
       - FLASK_RUN_HOST=0.0.0.0
-      - PLAYWRIGHT_DEFAULT_LAUNCH_OPTIONS=--headless
+      - DISPLAY=:99
     volumes:
       - whatsapp_session:/app/whatsapp_session
       - db_data:/app
+      - ./nginx.conf:/etc/nginx/sites-available/default
     restart: unless-stopped
     shm_size: '2gb'
+    command: sh -c "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1280x720x24 -ac +extension GLX +render -noreset & nginx && python -u app.py --host 0.0.0.0"
 
 volumes:
   whatsapp_session:

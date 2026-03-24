@@ -24,6 +24,10 @@ RUN apt-get update && apt-get install -y \
     libatspi2.0-0 \
     xauth \
     xvfb \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    fonts-wqy-zenhei \
+    nginx \
     && rm -rf /var/lib/apt/lists/*
 
 # Pre-install greenlet (needed by SQLAlchemy)
@@ -49,8 +53,8 @@ RUN playwright install chromium
 # Copy application files
 COPY . .
 
-# Expose port
-EXPOSE 5000
+# Expose ports
+EXPOSE 5000 80
 
-# Run the application with explicit host binding using xvfb for Playwright with logging
-CMD ["sh", "-c", "xvfb-run -a python -u app.py --host 0.0.0.0"]
+# Run the application with explicit host binding using xvfb for Playwright and nginx
+CMD ["sh", "-c", "rm -f /tmp/.X99-lock && Xvfb :99 -screen 0 1280x720x24 -ac +extension GLX +render -noreset & nginx && python -u app.py --host 0.0.0.0"]
