@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   whatsapp-tracker:
@@ -9,6 +8,8 @@ services:
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - FLASK_RUN_HOST=0.0.0.0
+      - PLAYWRIGHT_DEFAULT_LAUNCH_OPTIONS=--headless
     volumes:
       - whatsapp_session:/app/whatsapp_session
       - db_data:/app

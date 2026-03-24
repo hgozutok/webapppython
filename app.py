@@ -382,6 +382,20 @@ def test_telegram():
         return jsonify({'success': False, 'message': str(e)})
 
 if __name__ == '__main__':
+    import sys
+    host = '0.0.0.0'
+    port = 5000
+    
+    # Command line arguments for host and port
+    if '--host' in sys.argv:
+        idx = sys.argv.index('--host')
+        if idx + 1 < len(sys.argv):
+            host = sys.argv[idx + 1]
+    if '--port' in sys.argv:
+        idx = sys.argv.index('--port')
+        if idx + 1 < len(sys.argv):
+            port = int(sys.argv[idx + 1])
+    
     with app.app_context():
         db.create_all()
-    app.run(debug=True, port=5000)
+    app.run(debug=False, host=host, port=port)

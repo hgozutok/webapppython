@@ -1,17 +1,11 @@
 import os
-os.environ['PLAYWRIGHT_DISABLE_ASYNCIO'] = '1'
-os.environ['PYTHONASYNCIODEBUG'] = '0'
-
+import sys
 import threading
 import queue
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 import time
 import base64
-import asyncio
-
-# Disable asyncio event loop policy for playwright
-_original_policy = asyncio.get_event_loop_policy()
 
 class WhatsAppService:
     def __init__(self):
@@ -65,6 +59,8 @@ class WhatsAppService:
                     result = self._check_online_status_async(op['phone'])
                 elif op['op'] == 'disconnect':
                     result = self._disconnect_async()
+                elif op['op'] == 'take_screenshot':
+                    result = self._take_screenshot_async(op['path'])
                 elif op['op'] == 'stop':
                     break
                 
@@ -106,6 +102,8 @@ class WhatsAppService:
     def _connect_async(self):
         try:
             import os
+            import time
+            
             user_data_dir = os.path.join(os.path.dirname(__file__), 'whatsapp_session')
             
             if self.browser:
@@ -124,47 +122,85 @@ class WhatsAppService:
             
             self.playwright = sync_playwright().start()
             
+            import logging
+            logging.basicConfig(level=logging.DEBUG)
+            
+            print("Launching browser...")
+            sys.stdout.flush()
             self.browser = self.playwright.chromium.launch_persistent_context(
                 user_data_dir=user_data_dir,
-                headless=False,
-                args=['--disable-blink-features=AutomationControlled'],
-                timeout=60000
+                headless=True,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--disable-gpu'
+                ],
+                viewport={'width': 1920, 'height': 1080},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                timeout=120000
             )
+            print("Browser launched successfully")
             
             if len(self.browser.pages) > 0:
                 self.page = self.browser.pages[0]
             else:
                 self.page = self.browser.new_page()
+            print(f"Page created: {self.page is not None}")
             
-            self.page.goto('https://web.whatsapp.com')
-            self.page.wait_for_load_state('networkidle', timeout=30000)
-            time.sleep(5)
+            print("Navigating to WhatsApp Web...")
+            self.page.goto('https://web.whatsapp.com', timeout=120000, wait_until='networkidle')
+            print("Page loaded, waiting for initialization...")
             
-            try:
-                qr_canvas = len(self.page.locator('canvas').all())
-                qr_image = len(self.page.locator('img[src*="qr"], img[alt*="QR"]').all())
+            for i in range(20):
+                print(f"Checking connection status, attempt {i + 1}/20")
                 
-                if qr_canvas > 0 or qr_image > 0:
-                    print("QR code is visible - NOT logged in yet")
-                    self.connected = False
-                    return {'success': True, 'message': 'Browser started, waiting for QR scan', 'already_logged_in': False}
-            except:
-                pass
-            
-            try:
-                search_box = len(self.page.locator('[data-testid="search"]').all())
-                menu = len(self.page.locator('[data-testid="menu"]').all())
-                grid = len(self.page.locator('div[role="grid"]').all())
+                try:
+                    title = self.page.title()
+                    print(f"Page title: {title}")
+                    url = self.page.url
+                    print(f"Page URL: {url}")
+                except Exception as e:
+                    print(f"Error getting page info: {e}")
                 
-                if search_box > 0 or menu > 0 or grid > 0:
-                    print("Main interface elements found - ALREADY LOGGED IN")
-                    self.connected = True
-                    print(f"Setting self.connected = True")
-                    return {'success': True, 'message': 'WhatsApp already connected', 'already_logged_in': True}
-            except:
-                pass
+                try:
+                    search_box = self.page.locator('[data-testid="search"]').count()
+                    menu = self.page.locator('[data-testid="menu"]').count()
+                    grid = self.page.locator('div[role="grid"]').count()
+                    
+                    if search_box > 0 or menu > 0 or grid > 0:
+                        print("Main interface elements found - ALREADY LOGGED IN")
+                        self.connected = True
+                        print(f"Setting self.connected = True")
+                        return {'success': True, 'message': 'WhatsApp already connected', 'already_logged_in': True}
+                except Exception as e:
+                    print(f"Error checking main interface: {e}")
+                
+                try:
+                    qr_canvas = self.page.locator('canvas').count()
+                    qr_image = self.page.locator('img[src*="qr"], img[alt*="QR"]').count()
+                    
+                    print(f"Canvas count: {qr_canvas}, QR image count: {qr_image}")
+                    
+                    if qr_canvas > 0 or qr_image > 0:
+                        print("QR code is visible - NOT logged in yet")
+                        self.connected = False
+                        return {'success': True, 'message': 'Browser started, waiting for QR scan', 'already_logged_in': False}
+                except Exception as e:
+                    print(f"Error checking QR elements: {e}")
+                
+                try:
+                    debug_screenshot = os.path.join(os.path.dirname(__file__), f'deconnect_attempt_{i+1}.png')
+                    self.page.screenshot(path=debug_screenshot, timeout=10000)
+                    print(f"Debug screenshot saved: {debug_screenshot}")
+                except Exception as e:
+                    print(f"Could not take debug screenshot: {e}")
+                
+                time.sleep(5)
             
-            print("Status unclear - assume NOT logged in")
+            print("Status unclear after all attempts - assume NOT logged in")
             self.connected = False
             return {'success': True, 'message': 'Browser started, waiting for QR scan', 'already_logged_in': False}
         except Exception as e:
@@ -174,66 +210,116 @@ class WhatsAppService:
             return {'success': False, 'message': str(e)}
     
     def connect(self):
-        return self._execute_operation('connect', timeout=60)
+        try:
+            return self._execute_operation('connect', timeout=120)
+        except TimeoutError:
+            print("Connect operation timed out")
+            return {'success': False, 'message': 'Connection timeout'}
+        except Exception as e:
+            print(f"Connect operation failed: {e}")
+            return {'success': False, 'message': str(e)}
     
     def _get_qr_async(self):
         if not self.page:
             return None
         
         try:
-            time.sleep(5)
-            
             print("Looking for QR code...")
             
-            canvas_elements = self.page.locator('canvas')
-            canvas_count = canvas_elements.count()
-            print(f"Found {canvas_count} canvas elements")
-            
-            if canvas_count > 0:
-                for i in range(min(canvas_count, 5)):
-                    try:
-                        canvas = canvas_elements.nth(i)
-                        screenshot = canvas.screenshot(timeout=5000)
-                        
-                        if screenshot and len(screenshot) > 5000:
-                            print(f"QR code found from canvas {i}, size: {len(screenshot)}")
-                            self.qr_code = screenshot
-                            return base64.b64encode(self.qr_code).decode('utf-8')
-                    except Exception as e:
-                        print(f"Error capturing canvas {i}: {e}")
-                        continue
-            
-            qr_images = self.page.locator('img[src*="qr"], img[alt*="QR"], img[src*="QR"]')
-            img_count = qr_images.count()
-            print(f"Found {img_count} QR image elements")
-            
-            if img_count > 0:
+            max_retries = 15
+            for attempt in range(max_retries):
+                print(f"QR attempt {attempt + 1}/{max_retries}")
+                
                 try:
-                    screenshot = qr_images.first.screenshot(timeout=5000)
-                    if screenshot and len(screenshot) > 1000:
-                        print(f"QR code found from image, size: {len(screenshot)}")
-                        return base64.b64encode(screenshot).decode('utf-8')
-                except Exception as e:
-                    print(f"Error capturing QR image: {e}")
-            
-            qr_divs = self.page.locator('div[style*="qr"], div[class*="qr"]')
-            if qr_divs.count() > 0:
+                    self.page.wait_for_load_state('networkidle', timeout=3000)
+                except:
+                    pass
+                
+                time.sleep(5)
+                
                 try:
-                    screenshot = qr_divs.first.screenshot(timeout=5000)
-                    if screenshot and len(screenshot) > 1000:
-                        print(f"QR code found from div, size: {len(screenshot)}")
-                        return base64.b64encode(screenshot).decode('utf-8')
+                    canvas_elements = self.page.locator('canvas')
+                    canvas_count = canvas_elements.count()
+                    print(f"Found {canvas_count} canvas elements")
+                    
+                    if canvas_count > 0:
+                        for i in range(min(canvas_count, 10)):
+                            try:
+                                canvas = canvas_elements.nth(i)
+                                screenshot = canvas.screenshot(timeout=3000)
+                                
+                                if screenshot and len(screenshot) > 5000:
+                                    print(f"QR code found from canvas {i}, size: {len(screenshot)}")
+                                    self.qr_code = screenshot
+                                    return base64.b64encode(self.qr_code).decode('utf-8')
+                            except Exception as e:
+                                print(f"Error capturing canvas {i}: {e}")
+                                continue
                 except Exception as e:
-                    print(f"Error capturing QR div: {e}")
+                    print(f"Error searching for canvas: {e}")
+                
+                try:
+                    qr_images = self.page.locator('img[src*="qr"], img[alt*="QR"], img[src*="QR"]')
+                    img_count = qr_images.count()
+                    print(f"Found {img_count} QR image elements")
+                    
+                    if img_count > 0:
+                        for i in range(min(img_count, 5)):
+                            try:
+                                screenshot = qr_images.nth(i).screenshot(timeout=3000)
+                                if screenshot and len(screenshot) > 1000:
+                                    print(f"QR code found from image {i}, size: {len(screenshot)}")
+                                    return base64.b64encode(screenshot).decode('utf-8')
+                            except Exception as e:
+                                print(f"Error capturing QR image {i}: {e}")
+                                continue
+                except Exception as e:
+                    print(f"Error searching for QR images: {e}")
+                
+                try:
+                    qr_divs = self.page.locator('div[style*="qr"], div[class*="qr"]')
+                    if qr_divs.count() > 0:
+                        for i in range(min(qr_divs.count(), 5)):
+                            try:
+                                screenshot = qr_divs.nth(i).screenshot(timeout=3000)
+                                if screenshot and len(screenshot) > 1000:
+                                    print(f"QR code found from div {i}, size: {len(screenshot)}")
+                                    return base64.b64encode(screenshot).decode('utf-8')
+                            except Exception as e:
+                                print(f"Error capturing QR div {i}: {e}")
+                                continue
+                except Exception as e:
+                    print(f"Error searching for QR divs: {e}")
+            
+            print("QR code not found after all retries")
+            
+            try:
+                debug_screenshot = self.page.screenshot(timeout=10000)
+                if debug_screenshot:
+                    print(f"Full page screenshot taken, size: {len(debug_screenshot)}")
+            except Exception as e:
+                print(f"Could not take debug screenshot: {e}")
+            
+            return None
                     
         except Exception as e:
             print(f"Error getting QR: {e}")
-        
-        print("QR code not found")
-        return None
+            import traceback
+            traceback.print_exc()
+            return None
     
     def get_qr(self):
-        return self._execute_operation('get_qr', timeout=5)
+        try:
+            result = self._execute_operation('get_qr', timeout=120)
+            if result:
+                print(f"QR code result: {result}")
+            return result
+        except TimeoutError:
+            print("QR code operation timed out, returning None")
+            return None
+        except Exception as e:
+            print(f"QR code operation failed: {e}")
+            return None
     
     def _is_connected_async(self):
         print(f"[_is_connected_async] self.connected = {self.connected}, self.page = {self.page is not None}")
@@ -694,13 +780,16 @@ class WhatsAppService:
                                 else:
                                     print(f"[WARN] Debug screenshot bulunamadi, yeni screenshot cekilecek")
                                     screenshot_path = os.path.join(os.path.dirname(__file__), f'notify_{phone_clean}_{int(time.time())}.png')
-                                    if self.page:
-                                        try:
-                                            self.page.screenshot(path=screenshot_path, timeout=10000)
+                                    try:
+                                        result = self.take_screenshot(screenshot_path)
+                                        if result and result.get('success'):
                                             print(f"Yeni screenshot cekildi: {screenshot_path}")
-                                        except Exception as e:
-                                            print(f"Screenshot hatasi: {e}")
+                                        else:
+                                            print(f"Screenshot hatasi: {result.get('message') if result else 'Bilinmeyen hata'}")
                                             screenshot_path = None
+                                    except Exception as e:
+                                        print(f"Screenshot hatasi: {e}")
+                                        screenshot_path = None
                                 
                                 if not screenshot_path:
                                     print("[WARN] Screenshot yok, bildirim ekransiz gonderilecek")
@@ -717,7 +806,9 @@ class WhatsAppService:
                                 }
                                 self.on_online_callback(contact_info)
                             except Exception as e:
+                                import traceback
                                 print(f"[TELEGRAM ERROR] Bildirim hatasi: {e}")
+                                traceback.print_exc()
                     
                     # Report status change to main thread for DB update
                     if self.on_status_change_callback:
@@ -738,19 +829,45 @@ class WhatsAppService:
         print("Tracking stopped")
     
     def _disconnect_async(self):
-        self.stop_tracking()
+        try:
+            self.stop_tracking()
+        except:
+            pass
         if self.browser:
-            self.browser.close()
+            try:
+                self.browser.close()
+            except:
+                pass
         if self.playwright:
-            self.playwright.stop()
+            try:
+                self.playwright.stop()
+            except:
+                pass
         self.browser = None
         self.page = None
         self.context = None
         self.connected = False
         self.qr_code = None
+        return {'success': True}
+    
+    def _take_screenshot_async(self, path):
+        try:
+            if not self.page:
+                return {'success': False, 'message': 'No page available'}
+            self.page.screenshot(path=path, timeout=10000)
+            return {'success': True, 'path': path}
+        except Exception as e:
+            return {'success': False, 'message': str(e)}
+    
+    def take_screenshot(self, path):
+        return self._execute_operation('take_screenshot', timeout=15, path=path)
     
     def disconnect(self):
-        return self._execute_operation('disconnect', timeout=5)
+        try:
+            return self._execute_operation('disconnect', timeout=10)
+        except Exception as e:
+            print(f"Disconnect operation failed: {e}")
+            return {'success': False, 'message': str(e)}
     
     def __del__(self):
         self.running = False

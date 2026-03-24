@@ -1,6 +1,6 @@
-FROM python:3.13-slim
+FROM python:3.12-slim
 
-# Install system dependencies for Playwright
+# Install system dependencies for Playwright and build tools
 RUN apt-get update && apt-get install -y \
     wget \
     gnupg \
@@ -26,9 +26,13 @@ RUN apt-get update && apt-get install -y \
     xvfb \
     && rm -rf /var/lib/apt/lists/*
 
+# Pre-install greenlet (needed by SQLAlchemy)
+RUN pip install --no-cache-dir --force-reinstall greenlet
+
 # Set environment variables for Playwright
 ENV PLAYWRIGHT_DISABLE_ASYNCIO=1
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONIOENCODING=utf-8
 
 # Set working directory
 WORKDIR /app
@@ -39,8 +43,8 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright browsers
-RUN playwright install chromium --with-deps
+# Install Playwright browsers (without system deps - install manually)
+RUN playwright install chromium
 
 # Copy application files
 COPY . .
@@ -48,5 +52,5 @@ COPY . .
 # Expose port
 EXPOSE 5000
 
-# Run the application
-CMD ["python", "app.py"]
+# Run the application with explicit host binding using xvfb for Playwright with logging
+CMD ["sh", "-c", "xvfb-run -a python -u app.py --host 0.0.0.0"]

@@ -3,6 +3,7 @@ let whatsappConnected = false;
 let tracking = false;
 let refreshInterval = null;
 let contactStatuses = {};
+let alertShown = false;
 
 function formatDuration(seconds) {
     const hours = Math.floor(seconds / 3600);
@@ -241,6 +242,7 @@ async function saveEditContact() {
 }
 
 async function connectWhatsApp() {
+    alertShown = false;
     try {
         console.log('Connecting to WhatsApp...');
         const response = await fetch('/api/whatsapp/connect', {
@@ -320,7 +322,10 @@ async function checkQRCode() {
                     closeModal('qr-modal');
                     whatsappConnected = true;
                     updateConnectionStatus();
-                    alert('WhatsApp başarıyla bağlandı!');
+                    if (!alertShown) {
+                        alert('WhatsApp başarıyla bağlandı!');
+                        alertShown = true;
+                    }
                 });
             }
             
@@ -333,7 +338,10 @@ async function checkQRCode() {
                 closeModal('qr-modal');
                 whatsappConnected = true;
                 updateConnectionStatus();
-                alert('WhatsApp başarıyla bağlandı!');
+                if (!alertShown) {
+                    alert('WhatsApp başarıyla bağlandı!');
+                    alertShown = true;
+                }
             }
         } catch (error) {
             console.error('Error checking QR:', error);
@@ -367,6 +375,7 @@ async function disconnectWhatsApp() {
             method: 'POST'
         });
         whatsappConnected = false;
+        alertShown = false;
         updateConnectionStatus();
     } catch (error) {
         console.error('Error disconnecting WhatsApp:', error);
@@ -566,7 +575,10 @@ document.getElementById('manual-connect-btn').addEventListener('click', async ()
         closeModal('qr-modal');
         whatsappConnected = true;
         updateConnectionStatus();
-        alert('WhatsApp başarıyla bağlandı! Şimdi numara ekleyip takip başlatabilirsiniz.');
+        if (!alertShown) {
+            alert('WhatsApp başarıyla bağlandı! Şimdi numara ekleyip takip başlatabilirsiniz.');
+            alertShown = true;
+        }
     } catch (error) {
         console.error('Error connecting manually:', error);
         alert('Bağlantı sırasında hata oluştu.');
