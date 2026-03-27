@@ -369,10 +369,81 @@ class WhatsAppService:
             print(f"Connection check failed: {e}")
             return False
     
+    def _check_page_alive(self):
+        if not self.page:
+            return False
+        try:
+            self.page.evaluate('() => true')
+            return True
+        except:
+            return False
+    
+    def _restart_browser(self):
+        print("Restarting browser due to page crash...")
+        try:
+            if self.browser:
+                try:
+                    self.browser.close()
+                except:
+                    pass
+            self.browser = None
+            self.page = None
+            self.connected = False
+            
+            user_data_dir = os.path.join(os.path.dirname(__file__), 'whatsapp_session')
+            
+            self.playwright = sync_playwright().start()
+            self.browser = self.playwright.chromium.launch_persistent_context(
+                user_data_dir=user_data_dir,
+                headless=True,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage'
+                ],
+                viewport={'width': 1280, 'height': 720},
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                timeout=120000
+            )
+            
+            if len(self.browser.pages) > 0:
+                self.page = self.browser.pages[0]
+            else:
+                self.page = self.browser.new_page()
+            
+            self.page.goto('https://web.whatsapp.com', timeout=120000)
+            
+            for i in range(10):
+                try:
+                    search_box = self.page.locator('[data-testid="search"]').count()
+                    menu = self.page.locator('[data-testid="menu"]').count()
+                    
+                    if search_box > 0 or menu > 0:
+                        print("Browser restarted and connected")
+                        self.connected = True
+                        return True
+                except:
+                    pass
+                time.sleep(3)
+            
+            print("Browser restarted, waiting for QR scan")
+            return True
+        except Exception as e:
+            print(f"Failed to restart browser: {e}")
+            return False
+    
     def is_connected(self):
         return self._execute_operation('is_connected', timeout=3)
     
     def _check_online_status_async(self, phone_number):
+        if not self._check_page_alive():
+            print("Page not alive, attempting restart...")
+            if not self._restart_browser():
+                print("Failed to restart browser")
+                return None
+            time.sleep(3)
+        
         if not self.page or not self.connected:
             print(f"Cannot check status - page: {self.page is not None}, connected: {self.connected}")
             return None
@@ -385,12 +456,29 @@ class WhatsAppService:
             
             current_url = self.page.url
             if clean_phone in current_url:
-                print(f"Already on chat page, skipping navigation")
+                print(f"Already on chat page, reloading to ensure fresh state")
+                try:
+                    self.page.reload(timeout=60000)
+                    time.sleep(2)
+                except Exception as reload_error:
+                    print(f"Reload failed: {reload_error}")
             else:
                 print(f"Navigating to chat URL: {chat_url}")
-                self.page.goto(chat_url, timeout=60000)
-                self.page.wait_for_load_state('networkidle', timeout=30000)
-                time.sleep(5)
+                try:
+                    self.page.goto(chat_url, timeout=60000)
+                    self.page.wait_for_load_state('networkidle', timeout=30000)
+                    time.sleep(2)
+                except Exception as goto_error:
+                    error_str = str(goto_error).lower()
+                    if 'crashed' in error_str or 'target closed' in error_str:
+                        print(f"Page crashed during navigation: {goto_error}")
+                        print("Attempting to restart browser...")
+                        if self._restart_browser():
+                            print("Browser restarted successfully, returning None for this check")
+                        else:
+                            print("Failed to restart browser")
+                        return None
+                    raise
             
             header_selectors = [
                 '[data-testid="conversation-panel-header"]',
@@ -401,17 +489,31 @@ class WhatsAppService:
             ]
             
             header_found = False
-            for selector in header_selectors:
-                try:
-                    if self.page.wait_for_selector(selector, timeout=10000):
-                        print(f"Header found with selector: {selector}")
-                        header_found = True
-                        break
-                except:
-                    continue
+            retry_count = 0
+            max_header_retries = 1
+            
+            while retry_count < max_header_retries and not header_found:
+                for selector in header_selectors:
+                    try:
+                        if self.page.wait_for_selector(selector, timeout=5000):
+                            print(f"Header found with selector: {selector}")
+                            header_found = True
+                            break
+                    except:
+                        continue
+                
+                if not header_found:
+                    retry_count += 1
+                    if retry_count < max_header_retries:
+                        print(f"Header not found (attempt {retry_count}/{max_header_retries}), reloading page...")
+                        try:
+                            self.page.reload(timeout=60000)
+                            time.sleep(2)
+                        except Exception as reload_error:
+                            print(f"Reload failed: {reload_error}")
             
             if not header_found:
-                print("Header not found with any selector")
+                print("Header not found with any selector after retries")
                 return None
             
             time.sleep(3)
@@ -683,7 +785,7 @@ class WhatsAppService:
             return None
     
     def check_online_status(self, phone_number):
-        return self._execute_operation('check_online_status', timeout=120, phone=phone_number)
+        return self._execute_operation('check_online_status', timeout=150, phone=phone_number)
     
     def start_tracking(self, contact_ids, use_dom=True, use_image=True):
         self.contact_ids = contact_ids
@@ -691,6 +793,21 @@ class WhatsAppService:
         self.use_image = use_image
         self.tracking = True
         print(f"[start_tracking] Starting with contact_ids: {contact_ids}, connected: {self.connected}")
+        
+        # Auto-connect if not connected
+        if not self.is_connected():
+            print("[start_tracking] WhatsApp not connected, attempting to connect automatically...")
+            try:
+                connect_result = self.connect()
+                if connect_result and connect_result.get('success'):
+                    print("[start_tracking] Successfully connected to WhatsApp")
+                else:
+                    print(f"[start_tracking] Connection failed: {connect_result.get('message') if connect_result else 'Unknown error'}")
+            except Exception as e:
+                print(f"[start_tracking] Connection error: {e}")
+                import traceback
+                traceback.print_exc()
+        
         self.tracking_thread = threading.Thread(target=self._tracking_loop)
         self.tracking_thread.daemon = True
         self.tracking_thread.start()
@@ -735,6 +852,9 @@ class WhatsAppService:
         for contact_data in contacts_data:
             last_states[contact_data['id']] = None  # Force callback on first check
         
+        # Counter for cleanup operations
+        iteration_count = 0
+        
         while self.tracking:
             print("Tracking loop iteration...")
             for contact_data in contacts_data:
@@ -743,7 +863,13 @@ class WhatsAppService:
                 contact_phone = contact_data['phone']
                 
                 print(f"Checking contact: {contact_name} ({contact_phone})")
-                is_online = self.check_online_status(contact_phone)
+                try:
+                    is_online = self.check_online_status(contact_phone)
+                except Exception as e:
+                    print(f"Error checking status for {contact_name}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    is_online = None
                 
                 actual_is_online = is_online if is_online is not None else False
                 
@@ -821,6 +947,38 @@ class WhatsAppService:
                     
                     last_states[contact_id] = actual_is_online
                     print(f"Status change: {contact_name} -> {actual_is_online}")
+            
+            # Keep session alive by scrolling to bottom of chat list periodically
+            if iteration_count % 5 == 0:
+                try:
+                    self.page.evaluate('window.scrollTo(0, document.body.scrollHeight)')
+                except:
+                    pass
+            
+            # Refresh page occasionally to prevent session timeout (every ~30 min = 180 iterations at 10s interval)
+            if iteration_count % 180 == 0:
+                try:
+                    print("Refreshing WhatsApp page to prevent session timeout...")
+                    self.page.reload(timeout=30000)
+                    time.sleep(3)
+                except Exception as refresh_error:
+                    print(f"Error refreshing page: {refresh_error}")
+            
+            # Cleanup old debug screenshots every 10 iterations
+            iteration_count += 1
+            if iteration_count % 10 == 0:
+                try:
+                    import glob
+                    import time as time_module
+                    current_time = time_module.time()
+                    debug_files = glob.glob(os.path.join(os.path.dirname(__file__), 'debug_*.png'))
+                    for debug_file in debug_files:
+                        file_age = current_time - os.path.getmtime(debug_file)
+                        if file_age > 3600:  # Delete screenshots older than 1 hour
+                            os.remove(debug_file)
+                            print(f"Cleaned up old screenshot: {debug_file}")
+                except Exception as cleanup_error:
+                    print(f"Error cleaning up screenshots: {cleanup_error}")
             
             time.sleep(10)
         

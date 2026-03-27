@@ -96,7 +96,9 @@ def setup_status_callback():
                     contact_name = msg.get('contact_name')
                     
                     with app.app_context():
-                        contact = Contact.query.get(contact_id)
+                        from sqlalchemy import select
+                        stmt = select(Contact).where(Contact.id == contact_id)
+                        contact = db.session.execute(stmt).scalar_one_or_none()
                         if contact:
                             contact.is_online = is_online
                             
